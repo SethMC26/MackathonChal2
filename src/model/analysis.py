@@ -102,7 +102,9 @@ def emissions_by_state(df: pd.DataFrame) -> pd.DataFrame:
     # attach both results in a dict-like struct by returning a dict? keep simple: return mapped (abbrs) with an attribute
     mapped = mapped.sort_values(by=EM_COL, ascending=False)
     # to keep backwards compatibility, return mapped (abbr) first; callers can use table if needed
-    mapped.attrs["table_view"] = table
+    # store a JSON-serializable representation of the table in attrs to avoid
+    # embedding a DataFrame object (which breaks Streamlit/pyarrow serialization).
+    mapped.attrs["table_view"] = table.to_dict(orient="records")
     return mapped
 
 def yearly_trend(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
