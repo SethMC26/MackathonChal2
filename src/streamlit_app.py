@@ -4,7 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from model.data_process import preprocess_data
+from model.data_process import preprocess_data, create_random_forest, predict_emissions
 from model.analysis import (
     top_sectors,
     emissions_by_state,
@@ -191,6 +191,85 @@ else:
                             yaxis=dict(tickformat=",.0f"))
     st.plotly_chart(fig_trend, use_container_width=True)
     st.download_button("Download yearly trend CSV", trend_plot_df.to_csv(index=False), "yearly_trend.csv", "text/csv")
+
+# --- Predictive model UI -------------------------------------------------
+st.markdown("---")
+st.subheader("Predict Emissions — ML Model")
+with st.expander("Train or view model (uses state, sector, year)", expanded=True):
+    st.write("The app will train a Random Forest using the loaded dataset and report test accuracy (MSE, R²)."
+             " You can then enter a state, sector, and reporting year to get a prediction.")
+    # Use session_state to cache the trained model so it isn't retrained on every widget change
+    if 'model' not in st.session_state:
+        st.session_state['model'] = None
+        st.session_state['mse'] = None
+        st.session_state['r2'] = None
+
+    col_train, col_clear = st.columns([1, 1])
+    with col_train:
+        if st.button("Train model"):
+            try:
+                with st.spinner("Training Random Forest model — this may take a few seconds..."):
+                    m, mse, r2 = create_random_forest(df)
+                st.session_state['model'] = m
+                st.session_state['mse'] = mse
+                st.session_state['r2'] = r2
+            except Exception as e:
+                st.error(f"Model training failed: {e}")
+    with col_clear:
+        if st.button("Clear trained model"):
+            st.session_state['model'] = None
+            st.session_state['mse'] = None
+            st.session_state['r2'] = None
+
+    # show metrics if model available
+    if st.session_state.get('model') is not None:
+        try:
+            st.metric("Test R²", f"{st.session_state['r2']:.3f}")
+            st.write(f"Test MSE: {st.session_state['mse']:.2f}")
+        except Exception:
+            # in case values are not numeric
+            st.write("Model trained — test metrics unavailable")
+    else:
+        st.info("No trained model in session. Click 'Train model' to train once; it will be cached for this session.")
+
+    # user inputs for prediction
+    st.markdown("**Single prediction**")
+    # provide helpful defaults from the loaded dataset
+    default_state = state_choices[0] if state_choices else ""
+    default_sector = sector_choices[0] if sector_choices else ""
+    default_year = available_years[0] if available_years else 2024
+
+    # Combo-like selectbox for state: allow choosing from detected states or typing a custom value
+    state_options = ["Custom"] + state_choices if state_choices else ["Custom"]
+    state_default_idx = 1 if (state_choices and default_state in state_choices) else 0
+    state_sel = st.selectbox("State (choose or type custom)", options=state_options, index=state_default_idx)
+    if state_sel == "Custom":
+        state_input = st.text_input("State (2-letter or full name)", value=(default_state if default_state and default_state not in state_choices else ""))
+    else:
+        state_input = state_sel
+
+    # Combo-like selectbox for sector: choose from detected sectors or type custom
+    sector_options = ["Custom"] + sector_choices if sector_choices else ["Custom"]
+    sector_default_idx = 1 if (sector_choices and default_sector in sector_choices) else 0
+    sector_sel = st.selectbox("Industry sector (choose or type custom)", options=sector_options, index=sector_default_idx)
+    if sector_sel == "Custom":
+        sector_input = st.text_input("Industry sector", value=(default_sector if default_sector and default_sector not in sector_choices else ""))
+    else:
+        sector_input = sector_sel
+
+    year_input = st.number_input("Reporting year", min_value=1900, max_value=2100, value=int(default_year))
+
+    if st.button("Predict emissions"):
+        model = st.session_state.get('model')
+        if model is None:
+            st.error("No trained model available to make predictions. Train the model first or load a trained model into the session.")
+        else:
+            try:
+                pred = predict_emissions(model, state_input, sector_input, int(year_input))
+                st.success(f"Predicted total GHG emissions: {pred:,.0f} tonnes")
+                st.write("Note: predictions are based on a Random Forest trained on the currently loaded dataset; treat as illustrative.")
+            except Exception as e:
+                st.error(f"Prediction failed: {e}")
 
 # Emissions change 2021 -> 2023 (if years present)
 st.markdown("---")
