@@ -34,9 +34,9 @@ def create_random_forest(data: pd.DataFrame) -> Tuple[RandomForestRegressor, flo
     x_train, x_test, y_train, y_test = train_test_split(
         x, y, test_size=0.2, random_state=42)
     
-    
-    x_train['reporting_year'] = x_train['reporting_year'].astype(str)
-    x_test['reporting_year'] = x_test['reporting_year'].astype(str)
+    # Convert reporting_year to string to treat as categorical
+    #x_train['reporting_year'] = x_train['reporting_year'].astype(str)
+    #x_test['reporting_year'] = x_test['reporting_year'].astype(str)
     
 
     # HANDLE non numeric data 
