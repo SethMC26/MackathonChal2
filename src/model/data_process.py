@@ -38,7 +38,6 @@ def create_random_forest(data: pd.DataFrame) -> Tuple[RandomForestRegressor, flo
     x_train['reporting_year'] = x_train['reporting_year'].astype(str)
     x_test['reporting_year'] = x_test['reporting_year'].astype(str)
     
-    y_train_log = np.log1p(y_train)  # fit in log-space
 
     # HANDLE non numeric data 
     # One-hot encode categoricals on TRAIN only
@@ -49,7 +48,7 @@ def create_random_forest(data: pd.DataFrame) -> Tuple[RandomForestRegressor, flo
     x_test_d = x_test_d.reindex(columns=x_train_d.columns, fill_value=0)
 
     model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(x_train_d, y_train_log)
+    model.fit(x_train_d, y_train)
 
 
     preds = model.predict(x_test_d)
