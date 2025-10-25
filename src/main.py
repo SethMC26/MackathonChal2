@@ -1,7 +1,7 @@
 import argparse
 import sys
 import logging
-from model.data_process import preprocess_data
+from model.data_process import create_random_forest, preprocess_data
 
 VERSION = "0.1.0"
 
@@ -36,6 +36,8 @@ def main(argv=None):
         except Exception:
             # fallback if object isn't a pandas DataFrame or .to_string fails
             print(df)
+
+        print(create_random_forest(df))
     except Exception as e:
         logging.exception("Failed to preprocess file")
         print(f"Error: {e}")

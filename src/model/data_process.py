@@ -1,6 +1,13 @@
 # general preprocessing functions for the data 
 import logging
+from typing import Tuple
 import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import r2_score
+import numpy as np
 
 def preprocess_data(file: str) -> pd.DataFrame:
     try:
@@ -17,5 +24,37 @@ def preprocess_data(file: str) -> pd.DataFrame:
         logging.exception("preprocess_data: failed to read/parse file: %s", file)
         return None
 
+def create_random_forest(data: pd.DataFrame) -> Tuple[RandomForestRegressor, float, float]:
+    target_var = 'total_ghg_emissions_tonnes'
+    feature_vars = ['state', 'industry_sector', 'reporting_year']
 
+    x = data[feature_vars]
+    y = data[target_var]
     
+    x_train, x_test, y_train, y_test = train_test_split(
+        x, y, test_size=0.2, random_state=42)
+    
+    
+    x_train['reporting_year'] = x_train['reporting_year'].astype(str)
+    x_test['reporting_year'] = x_test['reporting_year'].astype(str)
+    
+    y_train_log = np.log1p(y_train)  # fit in log-space
+
+    # HANDLE non numeric data 
+    # One-hot encode categoricals on TRAIN only
+    x_train_d = pd.get_dummies(x_train, drop_first=False)
+
+    # Recreate the same columns for TEST
+    x_test_d = pd.get_dummies(x_test, drop_first=False)
+    x_test_d = x_test_d.reindex(columns=x_train_d.columns, fill_value=0)
+
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(x_train_d, y_train_log)
+
+
+    preds = model.predict(x_test_d)
+    mse = mean_squared_error(y_test, preds)
+    r2 = r2_score(y_test, preds)
+    logging.info(f"Random Forest Model - MSE: {mse}, R2: {r2}")
+
+    return (model, mse, r2)
