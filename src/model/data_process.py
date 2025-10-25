@@ -76,3 +76,20 @@ def create_random_forest(data: pd.DataFrame) -> Tuple[RandomForestRegressor, flo
     logging.info(f"Random Forest Model - MSE: {mse}, R2: {r2}")
 
     return (model, mse, r2)
+
+def predict_emissions(model: RandomForestRegressor, state: str, industry_sector: str, reporting_year: int) -> float:
+    input_df = pd.DataFrame([{
+        'state': state,
+        'industry_sector': industry_sector,
+        'reporting_year': str(reporting_year)
+    }])
+
+    # One-hot encode the input data
+    input_d = pd.get_dummies(input_df, drop_first=False)
+
+    # Align input columns with model training columns
+    model_features = model.feature_names_in_
+    input_d = input_d.reindex(columns=model_features, fill_value=0)
+
+    prediction = model.predict(input_d)
+    return prediction[0]
