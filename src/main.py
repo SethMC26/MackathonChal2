@@ -1,7 +1,7 @@
 import argparse
 import sys
 import logging
-from model.data_process import create_random_forest, preprocess_data
+from model.data_process import create_linear_model, create_random_forest, preprocess_data
 
 VERSION = "0.1.0"
 
@@ -37,6 +37,9 @@ def main(argv=None):
             # fallback if object isn't a pandas DataFrame or .to_string fails
             print(df)
 
+        print("linear regression model")
+        print(create_linear_model(df))
+        print("Random forest model")
         print(create_random_forest(df))
     except Exception as e:
         logging.exception("Failed to preprocess file")
