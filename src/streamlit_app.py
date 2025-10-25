@@ -102,64 +102,60 @@ def fmt_int(v):
     except Exception:
         return str(v)
 
-# Arrange Top sectors and State choropleth side-by-side for clarity
-left_col, right_col = st.columns([1, 1])
+# Make the Top sectors chart full-width to avoid being scrunched by the map
+st.subheader(f"Top {top_n} Emitting Sectors")
+if sectors_df.empty:
+    st.warning("Could not detect sector/emissions columns.")
+else:
+    # compute percent of filtered total
+    total_all = sectors_df[EM_COL].sum()
+    sectors_df["pct_of_total"] = sectors_df[EM_COL] / total_all * 100
+    sectors_df = sectors_df.sort_values(by=EM_COL, ascending=True)
+    fig = px.bar(
+        sectors_df,
+        x=EM_COL, y=SECTOR_COL, orientation="h",
+        color=EM_COL, color_continuous_scale="Turbo",
+        labels={SECTOR_COL: "Industry Sector", EM_COL: "Total GHG (tonnes)"},
+        hover_data={EM_COL: ':.0f', "pct_of_total": ':.2f'},
+    )
+    fig.update_layout(template="plotly_white", margin=dict(l=220, r=20, t=50, b=50), height=700, showlegend=False)
+    # show absolute formatted and percent text
+    fig.update_traces(text=sectors_df[EM_COL].map(fmt_int).values, textposition="outside", cliponaxis=False)
+    st.plotly_chart(fig, use_container_width=True)
+    st.download_button("Download top sectors CSV", sectors_df.to_csv(index=False), "top_sectors.csv", "text/csv")
 
-with left_col:
-    st.subheader(f"Top {top_n} Emitting Sectors")
-    if sectors_df.empty:
-        st.warning("Could not detect sector/emissions columns.")
-    else:
-        # compute percent of filtered total
-        total_all = sectors_df[EM_COL].sum()
-        sectors_df["pct_of_total"] = sectors_df[EM_COL] / total_all * 100
-        sectors_df = sectors_df.sort_values(by=EM_COL, ascending=True)
-        fig = px.bar(
-            sectors_df,
-            x=EM_COL, y=SECTOR_COL, orientation="h",
-            color=EM_COL, color_continuous_scale="Turbo",
-            labels={SECTOR_COL: "Industry Sector", EM_COL: "Total GHG (tonnes)"},
-            hover_data={EM_COL: ':.0f', "pct_of_total": ':.2f'},
-        )
-        fig.update_layout(template="plotly_white", margin=dict(l=220, r=20, t=50, b=50), height=600, showlegend=False)
-        # show absolute formatted and percent text
-        fig.update_traces(text=sectors_df[EM_COL].map(fmt_int).values, textposition="outside", cliponaxis=False)
-        st.plotly_chart(fig, use_container_width=True)
-        st.download_button("Download top sectors CSV", sectors_df.to_csv(index=False), "top_sectors.csv", "text/csv")
-
-with right_col:
-    st.subheader("Emissions by State — US Choropleth")
-    if states_mapped_df.empty:
-        st.warning("Could not detect state/emissions columns or no mappable state codes.")
-        if not states_table_df.empty:
-            st.write("Tabular totals by raw state values:")
+# Place the map below the sectors chart, full width, with an expander for the table
+st.subheader("Emissions by State — US Choropleth")
+if states_mapped_df.empty:
+    st.warning("Could not detect state/emissions columns or no mappable state codes.")
+    if not states_table_df.empty:
+        with st.expander("Tabular totals by raw state values"):
             st.dataframe(states_table_df.head(50))
-    else:
-        # add a toggle for log scale (helpful when a few states dominate)
-        log_scale = st.checkbox("Use log color scale (helps with skew)", value=False)
-        color_vals = np.log1p(states_mapped_df[EM_COL]) if log_scale else states_mapped_df[EM_COL]
-        plot_df = states_mapped_df.copy()
-        plot_df["_color_val"] = color_vals
-        fig_map = px.choropleth(
-            plot_df,
-            locations=STATE_COL,
-            locationmode="USA-states",
-            color="_color_val",
-            hover_name=STATE_COL,
-            hover_data={EM_COL: ':.0f'},
-            color_continuous_scale="Cividis",
-            scope="usa",
-            labels={EM_COL: "Total GHG (tonnes)"},
-            title="Total GHG by State (hover for details)"
-        )
-        if log_scale:
-            fig_map.update_coloraxes(colorbar_title="log(tonnes+1)")
-        fig_map.update_layout(template="plotly_white", margin=dict(l=0, r=0, t=50, b=0), height=600)
-        st.plotly_chart(fig_map, use_container_width=True)
-        st.download_button("Download emissions by state CSV", states_mapped_df.to_csv(index=False), "emissions_by_state.csv", "text/csv")
-        # also show top states table to the side
-        with st.expander("Show top states table"):
-            st.dataframe(states_mapped_df.head(50))
+else:
+    # add a toggle for log scale (helpful when a few states dominate)
+    log_scale = st.checkbox("Use log color scale (helps with skew)", value=False)
+    color_vals = np.log1p(states_mapped_df[EM_COL]) if log_scale else states_mapped_df[EM_COL]
+    plot_df = states_mapped_df.copy()
+    plot_df["_color_val"] = color_vals
+    fig_map = px.choropleth(
+        plot_df,
+        locations=STATE_COL,
+        locationmode="USA-states",
+        color="_color_val",
+        hover_name=STATE_COL,
+        hover_data={EM_COL: ':.0f'},
+        color_continuous_scale="Cividis",
+        scope="usa",
+        labels={EM_COL: "Total GHG (tonnes)"},
+        title="Total GHG by State (hover for details)"
+    )
+    if log_scale:
+        fig_map.update_coloraxes(colorbar_title="log(tonnes+1)")
+    fig_map.update_layout(template="plotly_white", margin=dict(l=0, r=0, t=50, b=0), height=600)
+    st.plotly_chart(fig_map, use_container_width=True)
+    st.download_button("Download emissions by state CSV", states_mapped_df.to_csv(index=False), "emissions_by_state.csv", "text/csv")
+    with st.expander("Show top states table"):
+        st.dataframe(states_mapped_df.head(50))
 
 # Yearly trend: line + rolling average
 st.markdown("---")
