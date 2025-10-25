@@ -239,8 +239,24 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
     default_sector = sector_choices[0] if sector_choices else ""
     default_year = available_years[0] if available_years else 2024
 
-    state_input = st.text_input("State (2-letter or full name)", value=default_state)
-    sector_input = st.text_input("Industry sector", value=default_sector)
+    # Combo-like selectbox for state: allow choosing from detected states or typing a custom value
+    state_options = ["Custom"] + state_choices if state_choices else ["Custom"]
+    state_default_idx = 1 if (state_choices and default_state in state_choices) else 0
+    state_sel = st.selectbox("State (choose or type custom)", options=state_options, index=state_default_idx)
+    if state_sel == "Custom":
+        state_input = st.text_input("State (2-letter or full name)", value=(default_state if default_state and default_state not in state_choices else ""))
+    else:
+        state_input = state_sel
+
+    # Combo-like selectbox for sector: choose from detected sectors or type custom
+    sector_options = ["Custom"] + sector_choices if sector_choices else ["Custom"]
+    sector_default_idx = 1 if (sector_choices and default_sector in sector_choices) else 0
+    sector_sel = st.selectbox("Industry sector (choose or type custom)", options=sector_options, index=sector_default_idx)
+    if sector_sel == "Custom":
+        sector_input = st.text_input("Industry sector", value=(default_sector if default_sector and default_sector not in sector_choices else ""))
+    else:
+        sector_input = sector_sel
+
     year_input = st.number_input("Reporting year", min_value=1900, max_value=2100, value=int(default_year))
 
     if st.button("Predict emissions"):
