@@ -1,22 +1,32 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
 from model.data_process import preprocess_data
-from model.analysis import top_sectors, emissions_by_state, yearly_trend, EM_COL, SECTOR_COL, STATE_COL, YEAR_COL
+from model.analysis import (
+    top_sectors,
+    emissions_by_state,
+    yearly_trend,
+    ensure_columns,
+    EM_COL,
+    SECTOR_COL,
+    STATE_COL,
+    YEAR_COL,
+)
 
 st.set_page_config(page_title="GHG Explorer", layout="wide")
 st.title("GHG Explorer — Top sectors, state choropleth, and yearly trends")
 st.markdown("Upload a CSV or use the bundled sample (testdata/data.csv). Columns expected: facility_name, state, industry_sector, total_ghg_emissions_tonnes, latitude, longitude, reporting_year")
 
-col1, col2 = st.columns([1, 3])
-with col1:
-    uploaded = st.file_uploader("Upload CSV", type=["csv"])
-    path = st.text_input("Or local path (optional)", value="testdata/data.csv")
-    top_n = st.slider("Top N sectors", min_value=3, max_value=20, value=10)
-    st.markdown("---")
-    st.write("Tip: For the map, two-letter US state codes (e.g. 'CA', 'NY') work best. Full state names will be mapped automatically where possible.")
+# Move uploader and basic controls to the sidebar for clearer main layout
+uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"]) 
+path = st.sidebar.text_input("Or local path (optional)", value="testdata/data.csv")
+top_n = st.sidebar.slider("Top N sectors", min_value=3, max_value=20, value=10)
+st.sidebar.markdown("---")
+st.sidebar.write("Tip: For the map, two-letter US state codes (e.g. 'CA', 'NY') work best. Full state names will be mapped automatically where possible.")
+st.sidebar.write("You can filter the dataset by year, sector, or state using the controls below.")
 
 df = None
 if uploaded is not None:
@@ -33,15 +43,57 @@ if df is None:
     st.info("Awaiting CSV upload or valid path.")
     st.stop()
 
-# preview
-st.subheader("Preview")
-st.dataframe(df.head(10))
+# normalize canonical column names and ensure numeric types
+df = ensure_columns(df)
+if YEAR_COL in df.columns:
+    df[YEAR_COL] = pd.to_numeric(df[YEAR_COL], errors="coerce")
+if EM_COL in df.columns:
+    df[EM_COL] = pd.to_numeric(df[EM_COL], errors="coerce").fillna(0)
+
+# filters (in sidebar)
+available_years = []
+if YEAR_COL in df.columns:
+    available_years = sorted(pd.unique(df[YEAR_COL].dropna()).astype(int).tolist())
+
+st.sidebar.markdown("### Filters")
+years_selected = st.sidebar.multiselect("Years", options=available_years, default=[y for y in [2021, 2022, 2023] if y in available_years])
+# sectors for multiselect: take top candidates from data
+try:
+    sector_choices = top_sectors(df, top_n=50)[SECTOR_COL].tolist()
+except Exception:
+    sector_choices = []
+sectors_selected = st.sidebar.multiselect("Sectors (choose to filter)", options=sector_choices, default=None)
+# state choices
+try:
+    state_choices = emissions_by_state(df)[STATE_COL].tolist()
+except Exception:
+    state_choices = []
+states_selected = st.sidebar.multiselect("States (2-letter) — optional", options=state_choices, default=None)
+
+# apply filters
+filtered_df = df.copy()
+if years_selected:
+    filtered_df = filtered_df[filtered_df[YEAR_COL].isin(years_selected)]
+if sectors_selected:
+    # some rows contain comma-separated sector lists; match any selected sector substring
+    mask = pd.Series(False, index=filtered_df.index)
+    for s in sectors_selected:
+        mask = mask | filtered_df[SECTOR_COL].astype(str).str.contains(s, na=False)
+    filtered_df = filtered_df[mask]
+if states_selected:
+    # use the canonical state column; allow matching either abbrev or full name
+    filtered_df = filtered_df[filtered_df[STATE_COL].astype(str).isin(states_selected)]
+
+# compact preview inside an expander so main charts stay prominent
+with st.expander("Preview (first 10 rows)", expanded=False):
+    st.dataframe(filtered_df.head(10))
 
 # compute aggregates
-sectors_df = top_sectors(df, top_n=top_n)
-states_mapped_df = emissions_by_state(df)  # mapped (abbr) df; full-table view in attrs
-states_table_df = states_mapped_df.attrs.get("table_view", pd.DataFrame())
-trend_df, year_col = yearly_trend(df)
+sectors_df = top_sectors(filtered_df, top_n=top_n)
+states_mapped_df = emissions_by_state(filtered_df)  # mapped (abbr) df; full-table view in attrs
+# attrs['table_view'] is stored as a list-of-dicts for JSON safety; convert back to DataFrame for display
+states_table_df = pd.DataFrame(states_mapped_df.attrs.get("table_view", []))
+trend_df, year_col = yearly_trend(filtered_df)
 
 # helper formatting
 def fmt_int(v):
@@ -50,51 +102,64 @@ def fmt_int(v):
     except Exception:
         return str(v)
 
-# Top sectors: horizontal bar, big, with values
-st.subheader(f"Top {top_n} Emitting Sectors")
-if sectors_df.empty:
-    st.warning("Could not detect sector/emissions columns.")
-else:
-    fig = px.bar(
-        sectors_df.sort_values(by=EM_COL, ascending=True),
-        x=EM_COL, y=SECTOR_COL, orientation="h",
-        color=EM_COL, color_continuous_scale="Turbo",
-        labels={SECTOR_COL: "Industry Sector", EM_COL: "Total GHG (tonnes)"},
-        hover_data={EM_COL: ':.0f'},
-    )
-    fig.update_layout(template="plotly_white", margin=dict(l=220, r=20, t=50, b=50), height=600, showlegend=False)
-    fig.update_traces(text=sectors_df[EM_COL].map(fmt_int).values, textposition="outside", cliponaxis=False)
-    st.plotly_chart(fig, use_container_width=True)
-    st.download_button("Download top sectors CSV", sectors_df.to_csv(index=False), "top_sectors.csv", "text/csv")
+# Arrange Top sectors and State choropleth side-by-side for clarity
+left_col, right_col = st.columns([1, 1])
 
-# Emissions by state: choropleth
-st.subheader("Emissions by State — US Choropleth")
-if states_mapped_df.empty:
-    st.warning("Could not detect state/emissions columns or no mappable state codes.")
-    if not states_table_df.empty:
-        st.write("Tabular totals by raw state values:")
-        st.dataframe(states_table_df.head(50))
-else:
-    # ensure 'state' column contains two-letter codes
-    locations = states_mapped_df[STATE_COL]
-    fig_map = px.choropleth(
-        states_mapped_df,
-        locations=STATE_COL,
-        locationmode="USA-states",
-        color=EM_COL,
-        hover_name=STATE_COL,
-        hover_data={EM_COL: ':.0f'},
-        color_continuous_scale="Cividis",
-        scope="usa",
-        labels={EM_COL: "Total GHG (tonnes)"},
-        title="Total GHG by State (hover for details)"
-    )
-    fig_map.update_layout(template="plotly_white", margin=dict(l=0, r=0, t=50, b=0), height=600)
-    st.plotly_chart(fig_map, use_container_width=True)
-    st.download_button("Download emissions by state CSV", states_mapped_df.to_csv(index=False), "emissions_by_state.csv", "text/csv")
-    # also show top states table to the side
-    with st.expander("Show top states table"):
-        st.dataframe(states_mapped_df.head(50))
+with left_col:
+    st.subheader(f"Top {top_n} Emitting Sectors")
+    if sectors_df.empty:
+        st.warning("Could not detect sector/emissions columns.")
+    else:
+        # compute percent of filtered total
+        total_all = sectors_df[EM_COL].sum()
+        sectors_df["pct_of_total"] = sectors_df[EM_COL] / total_all * 100
+        sectors_df = sectors_df.sort_values(by=EM_COL, ascending=True)
+        fig = px.bar(
+            sectors_df,
+            x=EM_COL, y=SECTOR_COL, orientation="h",
+            color=EM_COL, color_continuous_scale="Turbo",
+            labels={SECTOR_COL: "Industry Sector", EM_COL: "Total GHG (tonnes)"},
+            hover_data={EM_COL: ':.0f', "pct_of_total": ':.2f'},
+        )
+        fig.update_layout(template="plotly_white", margin=dict(l=220, r=20, t=50, b=50), height=600, showlegend=False)
+        # show absolute formatted and percent text
+        fig.update_traces(text=sectors_df[EM_COL].map(fmt_int).values, textposition="outside", cliponaxis=False)
+        st.plotly_chart(fig, use_container_width=True)
+        st.download_button("Download top sectors CSV", sectors_df.to_csv(index=False), "top_sectors.csv", "text/csv")
+
+with right_col:
+    st.subheader("Emissions by State — US Choropleth")
+    if states_mapped_df.empty:
+        st.warning("Could not detect state/emissions columns or no mappable state codes.")
+        if not states_table_df.empty:
+            st.write("Tabular totals by raw state values:")
+            st.dataframe(states_table_df.head(50))
+    else:
+        # add a toggle for log scale (helpful when a few states dominate)
+        log_scale = st.checkbox("Use log color scale (helps with skew)", value=False)
+        color_vals = np.log1p(states_mapped_df[EM_COL]) if log_scale else states_mapped_df[EM_COL]
+        plot_df = states_mapped_df.copy()
+        plot_df["_color_val"] = color_vals
+        fig_map = px.choropleth(
+            plot_df,
+            locations=STATE_COL,
+            locationmode="USA-states",
+            color="_color_val",
+            hover_name=STATE_COL,
+            hover_data={EM_COL: ':.0f'},
+            color_continuous_scale="Cividis",
+            scope="usa",
+            labels={EM_COL: "Total GHG (tonnes)"},
+            title="Total GHG by State (hover for details)"
+        )
+        if log_scale:
+            fig_map.update_coloraxes(colorbar_title="log(tonnes+1)")
+        fig_map.update_layout(template="plotly_white", margin=dict(l=0, r=0, t=50, b=0), height=600)
+        st.plotly_chart(fig_map, use_container_width=True)
+        st.download_button("Download emissions by state CSV", states_mapped_df.to_csv(index=False), "emissions_by_state.csv", "text/csv")
+        # also show top states table to the side
+        with st.expander("Show top states table"):
+            st.dataframe(states_mapped_df.head(50))
 
 # Yearly trend: line + rolling average
 st.markdown("---")
@@ -102,17 +167,25 @@ st.subheader("Yearly Trend")
 if trend_df.empty:
     st.warning("Could not detect year/emissions columns.")
 else:
-    trend_df = trend_df.sort_values(by=year_col).reset_index(drop=True)
-    trend_df["rolling3"] = trend_df[EM_COL].rolling(window=3, min_periods=1).mean()
+    # allow user to drill into a sector or view overall
+    sector_for_trend = st.selectbox("Show trend for (All or select a sector)", options=["All"] + sector_choices)
+    trend_plot_df = trend_df.copy()
+    if sector_for_trend != "All":
+        # compute yearly totals for the selected sector
+        mask = df[SECTOR_COL].astype(str).str.contains(sector_for_trend, na=False)
+        trend_plot_df = df[mask].groupby(YEAR_COL, dropna=True)[EM_COL].sum().reset_index().sort_values(by=YEAR_COL)
+
+    trend_plot_df = trend_plot_df.sort_values(by=year_col).reset_index(drop=True)
+    trend_plot_df["rolling3"] = trend_plot_df[EM_COL].rolling(window=3, min_periods=1).mean()
     fig_trend = go.Figure()
     fig_trend.add_trace(go.Scatter(
-        x=trend_df[year_col], y=trend_df[EM_COL],
+        x=trend_plot_df[year_col], y=trend_plot_df[EM_COL],
         mode="lines+markers", name="Annual total",
         line=dict(color="#1f77b4", width=2), marker=dict(size=8),
         hovertemplate="%{x}: %{y:,.0f} tonnes"
     ))
     fig_trend.add_trace(go.Scatter(
-        x=trend_df[year_col], y=trend_df["rolling3"],
+        x=trend_plot_df[year_col], y=trend_plot_df["rolling3"],
         mode="lines", name="3-yr rolling avg",
         line=dict(color="#ff7f0e", width=3, dash="dash"),
         hovertemplate="%{x}: %{y:,.0f} tonnes"
@@ -121,4 +194,77 @@ else:
                             xaxis_title="Year", yaxis_title="Total GHG (tonnes)",
                             yaxis=dict(tickformat=",.0f"))
     st.plotly_chart(fig_trend, use_container_width=True)
-    st.download_button("Download yearly trend CSV", trend_df.to_csv(index=False), "yearly_trend.csv", "text/csv")
+    st.download_button("Download yearly trend CSV", trend_plot_df.to_csv(index=False), "yearly_trend.csv", "text/csv")
+
+# Emissions change 2021 -> 2023 (if years present)
+st.markdown("---")
+st.subheader("Change 2021 → 2023")
+if 2021 in available_years and 2023 in available_years:
+    aggby = st.selectbox("Group change by", options=["Overall", "State", "Sector"], index=0)
+    if aggby == "Overall":
+        tot21 = df[df[YEAR_COL] == 2021][EM_COL].sum()
+        tot23 = df[df[YEAR_COL] == 2023][EM_COL].sum()
+        delta = tot23 - tot21
+        pct = (delta / tot21 * 100) if tot21 else np.nan
+        st.metric("Total change 2021 → 2023 (tonnes)", fmt_int(delta), delta=fmt_int(delta))
+        st.write(f"Percent change: {pct:.2f}%")
+    else:
+        if aggby == "State":
+            g21 = df[df[YEAR_COL] == 2021].groupby(STATE_COL, dropna=True)[EM_COL].sum()
+            g23 = df[df[YEAR_COL] == 2023].groupby(STATE_COL, dropna=True)[EM_COL].sum()
+        else:
+            g21 = df[df[YEAR_COL] == 2021].groupby(SECTOR_COL, dropna=True)[EM_COL].sum()
+            g23 = df[df[YEAR_COL] == 2023].groupby(SECTOR_COL, dropna=True)[EM_COL].sum()
+        change = (g23 - g21).fillna(0).sort_values(ascending=False).head(10).reset_index().rename(columns={0: EM_COL})
+        change.columns = [aggby, "change"]
+        fig_ch = px.bar(change, x="change", y=aggby, orientation="h", labels={"change": "Change (tonnes)"})
+        fig_ch.update_layout(template="plotly_white", height=500, margin=dict(l=200))
+        st.plotly_chart(fig_ch, use_container_width=True)
+else:
+    st.info("Both 2021 and 2023 must be present in the dataset to compute the change."
+            " Use the year filters or upload a dataset covering those years.")
+
+# Outlier detection by facility
+st.markdown("---")
+st.subheader("Identify Outlier Facilities")
+with st.expander("Outlier detection settings (z-score or IQR)"):
+    outlier_method = st.selectbox("Method", options=["Z-score", "IQR"], index=0)
+    if outlier_method == "Z-score":
+        z_thresh = st.slider("Z-score threshold", min_value=1.0, max_value=5.0, value=3.0)
+    else:
+        iqr_mult = st.slider("IQR multiplier (k)", min_value=1.0, max_value=5.0, value=1.5)
+    top_fac_n = st.number_input("Show top N outlier facilities", min_value=5, max_value=200, value=20)
+
+fac_agg = filtered_df.groupby("facility_name", dropna=True, as_index=False)[[EM_COL, "latitude", "longitude"]].agg({EM_COL: "sum", "latitude": "first", "longitude": "first"})
+fac_agg = fac_agg.sort_values(by=EM_COL, ascending=False).reset_index(drop=True)
+if fac_agg.empty:
+    st.info("No facility-level data available for outlier detection (missing facility name or emissions).")
+else:
+    if outlier_method == "Z-score":
+        mu = fac_agg[EM_COL].mean()
+        sigma = fac_agg[EM_COL].std(ddof=0) if fac_agg[EM_COL].std(ddof=0) != 0 else 1.0
+        fac_agg["z"] = (fac_agg[EM_COL] - mu) / sigma
+        outliers = fac_agg[fac_agg["z"].abs() >= z_thresh].sort_values(by="z", ascending=False)
+    else:
+        q1 = fac_agg[EM_COL].quantile(0.25)
+        q3 = fac_agg[EM_COL].quantile(0.75)
+        iqr = q3 - q1
+        lower = q1 - iqr_mult * iqr
+        upper = q3 + iqr_mult * iqr
+        outliers = fac_agg[(fac_agg[EM_COL] < lower) | (fac_agg[EM_COL] > upper)].sort_values(by=EM_COL, ascending=False)
+
+    st.write(f"Found {len(outliers)} outlier facilities (matching current filters)")
+    if not outliers.empty:
+        st.dataframe(outliers.head(top_fac_n))
+        # map outliers
+        has_geo = outliers["latitude"].notna().any() and outliers["longitude"].notna().any()
+        if has_geo:
+            map_df = outliers.dropna(subset=["latitude", "longitude"]) 
+            fig_map_out = px.scatter_geo(map_df, lat="latitude", lon="longitude",
+                                         hover_name="facility_name", size=EM_COL,
+                                         projection="natural earth", scope="usa",
+                                         title="Outlier Facilities (size ~ emissions)")
+            fig_map_out.update_layout(template="plotly_white", height=600)
+            st.plotly_chart(fig_map_out, use_container_width=True)
+        else:
+            st.info("Outliers found but no latitude/longitude available to map them.")
