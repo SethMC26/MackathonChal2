@@ -8,7 +8,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import r2_score
 from sklearn.linear_model import LinearRegression
-import numpy as np
 
 def preprocess_data(file: str) -> pd.DataFrame:
     try:
@@ -41,7 +40,7 @@ def __preprocess_for_model(data: pd.DataFrame) -> Tuple[pd.DataFrame]:
     # HANDLE non numeric data 
     # One-hot encode categoricals on TRAIN only
     x_train_d = pd.get_dummies(x_train, drop_first=False)
-
+    
     # Recreate the same columns for TEST
     x_test_d = pd.get_dummies(x_test, drop_first=False)
     x_test_d = x_test_d.reindex(columns=x_train_d.columns, fill_value=0)
@@ -50,7 +49,7 @@ def __preprocess_for_model(data: pd.DataFrame) -> Tuple[pd.DataFrame]:
 
 def create_linear_model(data: pd.DataFrame) -> Tuple[LinearRegression, float, float]:
     x_train, x_test, y_train, y_test = __preprocess_for_model(data)
-    
+
     # create and train model
     model = LinearRegression()
     model.fit(x_train, y_train)
