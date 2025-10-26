@@ -3,8 +3,18 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import joblib
+from pathlib import Path
+import time
 
-from model.data_process import preprocess_data, create_random_forest, predict_emissions
+from model.data_process import (
+    preprocess_data,
+    create_random_forest,
+    random_forest_predict_emissions,
+    create_linear_regression,
+    linear_predict_emissions,
+    evaluate_model,           # <- added
+)
 from model.analysis import (
     top_sectors,
     emissions_by_state,
@@ -17,16 +27,20 @@ from model.analysis import (
 )
 
 st.set_page_config(page_title="GHG Explorer", layout="wide")
-st.title("GHG Explorer — Top sectors, state choropleth, and yearly trends")
-st.markdown("Upload a CSV or use the bundled sample (testdata/data.csv). Columns expected: facility_name, state, industry_sector, total_ghg_emissions_tonnes, latitude, longitude, reporting_year")
+st.title("GHG Explorer — Top sectors, choropleth, trends, and predictive models")
+st.markdown(
+    "Upload a CSV or use the bundled sample (`testdata/data.csv`).\n\n"
+    "Required columns (any reasonable variant will be mapped): `facility_name`, `state` (abbr or full name), `industry_sector`, `total_ghg_emissions_tonnes`, `latitude`, `longitude`, `reporting_year`.\n\n"
+    "The app will auto-train or load saved ML models (Random Forest and Linear Regression) on the loaded dataset and allow single-row predictions."
+)
 
 # Move uploader and basic controls to the sidebar for clearer main layout
 uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"]) 
 path = st.sidebar.text_input("Or local path (optional)", value="testdata/data.csv")
 top_n = st.sidebar.slider("Top N sectors", min_value=3, max_value=20, value=10)
 st.sidebar.markdown("---")
-st.sidebar.write("Tip: For the map, two-letter US state codes (e.g. 'CA', 'NY') work best. Full state names will be mapped automatically where possible.")
-st.sidebar.write("You can filter the dataset by year, sector, or state using the controls below.")
+st.sidebar.write("Tip: For the map, two-letter US state codes (e.g. 'CA', 'NY') work best — full state names are also accepted and will be mapped where possible.")
+st.sidebar.write("Filter the dataset by year, sector, or state using the controls below. Use the Preview to confirm your uploaded file's columns and a small sample.")
 
 df = None
 if uploaded is not None:
@@ -196,41 +210,140 @@ else:
 st.markdown("---")
 st.subheader("Predict Emissions — ML Model")
 with st.expander("Train or view model (uses state, sector, year)", expanded=True):
-    st.write("The app will train a Random Forest using the loaded dataset and report test accuracy (MSE, R²)."
-             " You can then enter a state, sector, and reporting year to get a prediction.")
-    # Use session_state to cache the trained model so it isn't retrained on every widget change
-    if 'model' not in st.session_state:
-        st.session_state['model'] = None
-        st.session_state['mse'] = None
-        st.session_state['r2'] = None
+    st.write(
+        "This section auto-loads saved models from `outputs/` if present. If no saved model is found, the app will train models on the currently loaded dataset at startup and save them to `outputs/` for reuse.\n\n"
+        "Predictions are illustrative — they show model outputs given the dataset and are not a substitute for a validated emissions model."
+    )
+    # Ensure session_state keys exist for both models
+    if 'model_rf' not in st.session_state:
+        st.session_state['model_rf'] = None
+        st.session_state['mse_rf'] = None
+        st.session_state['r2_rf'] = None
+    if 'model_lr' not in st.session_state:
+        st.session_state['model_lr'] = None
+        st.session_state['mse_lr'] = None
+        st.session_state['r2_lr'] = None
 
-    col_train, col_clear = st.columns([1, 1])
-    with col_train:
-        if st.button("Train model"):
-            try:
-                with st.spinner("Training Random Forest model — this may take a few seconds..."):
-                    m, mse, r2 = create_random_forest(df)
-                st.session_state['model'] = m
-                st.session_state['mse'] = mse
-                st.session_state['r2'] = r2
-            except Exception as e:
-                st.error(f"Model training failed: {e}")
-    with col_clear:
-        if st.button("Clear trained model"):
-            st.session_state['model'] = None
-            st.session_state['mse'] = None
-            st.session_state['r2'] = None
+    def find_saved_model(directory: str = "outputs", prefix: str = None):
+        """Return Path to the newest model file in outputs matching optional prefix if present (pkl, joblib, sav)."""
+        p = Path(directory)
+        if not p.exists() or not p.is_dir():
+            return None
+        # candidate extensions
+        exts = ("*.pkl", "*.joblib", "*.sav", "*.pickle")
+        files = []
+        for e in exts:
+            files.extend(p.glob(e))
+        if not files:
+            return None
+        if prefix:
+            files = [f for f in files if f.name.startswith(prefix)]
+            if not files:
+                return None
+        # return the most recently modified
+        files = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
+        return files[0]
 
-    # show metrics if model available
-    if st.session_state.get('model') is not None:
+    # Handle Random Forest and Linear Regression models separately
+    # RF
+    saved_rf = find_saved_model("outputs", prefix="model_rf_")
+    if saved_rf and st.session_state.get('model_rf') is None:
         try:
-            st.metric("Test R²", f"{st.session_state['r2']:.3f}")
-            st.write(f"Test MSE: {st.session_state['mse']:.2f}")
+            with st.spinner(f"Loading saved Random Forest model from {saved_rf.name}..."):
+                st.session_state['model_rf'] = joblib.load(saved_rf)
+            # compute metrics on current dataset if possible
+            try:
+                mse_rf, r2_rf = evaluate_model(st.session_state['model_rf'], df)
+                st.session_state['mse_rf'] = mse_rf
+                st.session_state['r2_rf'] = r2_rf
+            except Exception:
+                st.session_state['mse_rf'] = None
+                st.session_state['r2_rf'] = None
+            st.info(f"Loaded Random Forest model: {saved_rf.name}")
+        except Exception as e:
+            st.warning(f"Found RF model at {saved_rf} but failed to load: {e}")
+    elif saved_rf is None and st.session_state.get('model_rf') is None:
+        # train RF at startup
+        try:
+            with st.spinner("No saved Random Forest found — training Random Forest (this may take a minute)..."):
+                m_rf, mse_rf, r2_rf = create_random_forest(df)
+            st.session_state['model_rf'] = m_rf
+            st.session_state['mse_rf'] = mse_rf
+            st.session_state['r2_rf'] = r2_rf
+            outdir = Path("outputs")
+            outdir.mkdir(parents=True, exist_ok=True)
+            fname_rf = outdir / f"model_rf_{int(time.time())}.joblib"
+            try:
+                joblib.dump(m_rf, fname_rf)
+                st.info(f"Trained Random Forest and saved to {fname_rf.name}")
+            except Exception as e:
+                st.warning(f"Trained Random Forest but failed to save to disk: {e}")
+        except Exception as e:
+            st.error(f"Automatic Random Forest training failed: {e}")
+
+    # LR
+    saved_lr = find_saved_model("outputs", prefix="model_lr_")
+    if saved_lr and st.session_state.get('model_lr') is None:
+        try:
+            with st.spinner(f"Loading saved Linear Regression model from {saved_lr.name}..."):
+                st.session_state['model_lr'] = joblib.load(saved_lr)
+            # compute metrics on current dataset if possible
+            try:
+                mse_lr, r2_lr = evaluate_model(st.session_state['model_lr'], df)
+                st.session_state['mse_lr'] = mse_lr
+                st.session_state['r2_lr'] = r2_lr
+            except Exception:
+                st.session_state['mse_lr'] = None
+                st.session_state['r2_lr'] = None
+            st.info(f"Loaded Linear Regression model: {saved_lr.name}")
+        except Exception as e:
+            st.warning(f"Found LR model at {saved_lr} but failed to load: {e}")
+    elif saved_lr is None and st.session_state.get('model_lr') is None:
+        # train LR at startup
+        try:
+            with st.spinner("No saved Linear Regression found — training Linear Regression (fast)..."):
+                m_lr, mse_lr, r2_lr = create_linear_regression(df)
+            st.session_state['model_lr'] = m_lr
+            st.session_state['mse_lr'] = mse_lr
+            st.session_state['r2_lr'] = r2_lr
+            outdir = Path("outputs")
+            outdir.mkdir(parents=True, exist_ok=True)
+            fname_lr = outdir / f"model_lr_{int(time.time())}.joblib"
+            try:
+                joblib.dump(m_lr, fname_lr)
+                st.info(f"Trained Linear Regression and saved to {fname_lr.name}")
+            except Exception as e:
+                st.warning(f"Trained Linear Regression but failed to save to disk: {e}")
+        except Exception as e:
+            st.error(f"Automatic Linear Regression training failed: {e}")
+
+    # provide a single Clear button to reset the in-session models if needed
+    col_clear = st.columns([1])[0]
+    if col_clear.button("Clear cached models (force retrain on refresh)"):
+        st.session_state['model_rf'] = None
+        st.session_state['mse_rf'] = None
+        st.session_state['r2_rf'] = None
+        st.session_state['model_lr'] = None
+        st.session_state['mse_lr'] = None
+        st.session_state['r2_lr'] = None
+
+    # show metrics for available models
+    if st.session_state.get('model_rf') is not None:
+        try:
+            if st.session_state.get('r2_rf') is not None:
+                st.metric("Random Forest Test R²", f"{st.session_state['r2_rf']:.3f}")
+            if st.session_state.get('mse_rf') is not None:
+                st.write(f"Random Forest Test MSE: {st.session_state['mse_rf']:.2f}")
         except Exception:
-            # in case values are not numeric
-            st.write("Model trained — test metrics unavailable")
-    else:
-        st.info("No trained model in session. Click 'Train model' to train once; it will be cached for this session.")
+            st.write("Random Forest model available in session.")
+    if st.session_state.get('model_lr') is not None:
+        try:
+            if st.session_state.get('r2_lr') is not None:
+                st.metric("Linear Regression Test R²", f"{st.session_state['r2_lr']:.3f}")
+            if st.session_state.get('mse_lr') is not None:
+                st.write(f"Linear Regression Test MSE: {st.session_state['mse_lr']:.2f}")
+        except Exception:
+            st.write("Linear Regression model available in session.")
 
     # user inputs for prediction
     st.markdown("**Single prediction**")
@@ -259,17 +372,38 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
 
     year_input = st.number_input("Reporting year", min_value=1900, max_value=2100, value=int(default_year))
 
-    if st.button("Predict emissions"):
-        model = st.session_state.get('model')
-        if model is None:
-            st.error("No trained model available to make predictions. Train the model first or load a trained model into the session.")
-        else:
+    st.write("Predictions from both models (if available) will be shown below. Click 'Run predictions' to compute outputs for the chosen inputs.")
+
+    if st.button("Run predictions"):
+        preds = []
+        # Random Forest prediction
+        if st.session_state.get('model_rf') is not None:
             try:
-                pred = predict_emissions(model, state_input, sector_input, int(year_input))
-                st.success(f"Predicted total GHG emissions: {pred:,.0f} tonnes")
-                st.write("Note: predictions are based on a Random Forest trained on the currently loaded dataset; treat as illustrative.")
+                pr = random_forest_predict_emissions(st.session_state['model_rf'], state_input, sector_input, int(year_input))
+                preds.append(("Random Forest", pr))
             except Exception as e:
-                st.error(f"Prediction failed: {e}")
+                preds.append(("Random Forest", f"Error: {e}"))
+        else:
+            preds.append(("Random Forest", "Model not available"))
+
+        # Linear Regression prediction
+        if st.session_state.get('model_lr') is not None:
+            try:
+                pl = linear_predict_emissions(st.session_state['model_lr'], state_input, sector_input, int(year_input))
+                preds.append(("Linear Regression", pl))
+            except Exception as e:
+                preds.append(("Linear Regression", f"Error: {e}"))
+        else:
+            preds.append(("Linear Regression", "Model not available"))
+
+        # display results side-by-side when both present
+        cols = st.columns(len(preds))
+        for (name, val), col in zip(preds, cols):
+            if isinstance(val, (int, float, np.floating, np.integer)):
+                col.metric(name, f"{val:,.0f} tonnes")
+            else:
+                col.write(f"{name}: {val}")
+        st.write("Note: predictions are illustrative and depend on how the models were trained on the current dataset.")
 
 # Emissions change 2021 -> 2023 (if years present)
 st.markdown("---")
@@ -343,3 +477,90 @@ else:
             st.plotly_chart(fig_map_out, use_container_width=True)
         else:
             st.info("Outliers found but no latitude/longitude available to map them.")
+
+# BEGIN Inserted: Drivers of Emissions analysis & visuals
+st.markdown("---")
+st.subheader("Drivers of Emissions — contribution, Pareto, and top contributors")
+
+# Sector contribution and Pareto
+if not sectors_df.empty:
+    sec = sectors_df[[SECTOR_COL, EM_COL]].copy()
+    sec = sec.sort_values(by=EM_COL, ascending=False).reset_index(drop=True)
+    sec["pct"] = sec[EM_COL] / sec[EM_COL].sum() * 100
+    sec["cumulative_pct"] = sec["pct"].cumsum()
+
+    top10_share = sec.head(10)[EM_COL].sum() / sec[EM_COL].sum() * 100
+
+    col_a, col_b = st.columns([1, 2])
+    with col_a:
+        st.metric("Top 10 sectors share", f"{top10_share:.1f}%")
+        st.write("Top sectors (by total)")
+        st.dataframe(sec.head(10).assign(**{EM_COL: sec[EM_COL].map(fmt_int)}))
+
+    # Pareto chart: bars + cumulative line
+    pareto = go.Figure()
+    pareto.add_trace(go.Bar(x=sec[SECTOR_COL], y=sec[EM_COL], name="Emissions", marker_color=px.colors.sequential.Turbo))
+    pareto.add_trace(go.Scatter(x=sec[SECTOR_COL], y=sec["cumulative_pct"], name="Cumulative %", yaxis="y2", mode="lines+markers", line=dict(color="#ff7f0e")))
+    pareto.update_layout(
+        title="Sector Pareto — contributions and cumulative share",
+        xaxis_tickangle=-45,
+        yaxis=dict(title="Total GHG (tonnes)", tickformat=","),
+        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 110]),
+        template="plotly_white",
+        margin=dict(l=80, r=80, t=50, b=160),
+        height=520,
+    )
+    st.plotly_chart(pareto, use_container_width=True)
+
+# State contribution and Pareto
+states_for_pareto = states_mapped_df.copy()
+if not states_for_pareto.empty:
+    st.write("Top states by contribution")
+    st.dataframe(states_for_pareto.head(10).assign(**{EM_COL: states_for_pareto[EM_COL].map(fmt_int)}))
+
+    s = states_for_pareto[[STATE_COL, EM_COL]].sort_values(by=EM_COL, ascending=False).reset_index(drop=True)
+    s["pct"] = s[EM_COL] / s[EM_COL].sum() * 100
+    s["cumulative_pct"] = s["pct"].cumsum()
+
+    pareto_states = go.Figure()
+    pareto_states.add_trace(go.Bar(x=s[STATE_COL], y=s[EM_COL], name="Emissions", marker_color=px.colors.sequential.Cividis))
+    pareto_states.add_trace(go.Scatter(x=s[STATE_COL], y=s["cumulative_pct"], name="Cumulative %", yaxis="y2", mode="lines+markers", line=dict(color="#2ca02c")))
+    pareto_states.update_layout(
+        title="State Pareto — contributions and cumulative share",
+        xaxis_tickangle=-45,
+        yaxis=dict(title="Total GHG (tonnes)"),
+        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 110]),
+        template="plotly_white",
+        margin=dict(l=80, r=80, t=50, b=150),
+        height=480,
+    )
+    st.plotly_chart(pareto_states, use_container_width=True)
+
+# Top state x sector contributors and treemap / heatmap
+ss = filtered_df.groupby([STATE_COL, SECTOR_COL], dropna=True)[EM_COL].sum().reset_index()
+if not ss.empty:
+    top_pairs = ss.sort_values(by=EM_COL, ascending=False).head(50).reset_index(drop=True)
+    st.subheader("Top State × Sector contributors")
+    st.write("Top combinations by total emissions")
+    st.dataframe(top_pairs.head(20).assign(**{EM_COL: top_pairs[EM_COL].map(fmt_int)}))
+
+    # Treemap for composition
+    treemap = px.treemap(top_pairs, path=[STATE_COL, SECTOR_COL], values=EM_COL,
+                         color=EM_COL, color_continuous_scale="Viridis",
+                         title="Treemap: State → Sector contributions")
+    treemap.update_layout(margin=dict(t=50, l=10, r=10, b=10), height=600)
+    st.plotly_chart(treemap, use_container_width=True)
+
+    # Pivot heatmap for a compact view (states x sectors)
+    pivot = top_pairs.pivot_table(index=STATE_COL, columns=SECTOR_COL, values=EM_COL, fill_value=0)
+    # keep only top N states/sectors for readability
+    top_state_idx = pivot.sum(axis=1).sort_values(ascending=False).head(12).index
+    top_sector_idx = pivot.sum(axis=0).sort_values(ascending=False).head(12).index
+    pivot_small = pivot.loc[top_state_idx, top_sector_idx]
+    if not pivot_small.empty:
+        hm = px.imshow(pivot_small, labels=dict(x="Sector", y="State", color="Emissions"),
+                       color_continuous_scale="Cividis", aspect="auto",
+                       title="Heatmap: emissions by State (rows) × Sector (cols)")
+        hm.update_layout(margin=dict(l=80, r=20, t=50, b=120), height=600)
+        st.plotly_chart(hm, use_container_width=True)
+# END Inserted: Drivers of Emissions analysis & visuals
