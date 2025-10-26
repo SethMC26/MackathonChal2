@@ -26,16 +26,20 @@ from model.analysis import (
 )
 
 st.set_page_config(page_title="GHG Explorer", layout="wide")
-st.title("GHG Explorer — Top sectors, state choropleth, and yearly trends")
-st.markdown("Upload a CSV or use the bundled sample (testdata/data.csv). Columns expected: facility_name, state, industry_sector, total_ghg_emissions_tonnes, latitude, longitude, reporting_year")
+st.title("GHG Explorer — Top sectors, choropleth, trends, and predictive models")
+st.markdown(
+    "Upload a CSV or use the bundled sample (`testdata/data.csv`).\n\n"
+    "Required columns (any reasonable variant will be mapped): `facility_name`, `state` (abbr or full name), `industry_sector`, `total_ghg_emissions_tonnes`, `latitude`, `longitude`, `reporting_year`.\n\n"
+    "The app will auto-train or load saved ML models (Random Forest and Linear Regression) on the loaded dataset and allow single-row predictions."
+)
 
 # Move uploader and basic controls to the sidebar for clearer main layout
 uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"]) 
 path = st.sidebar.text_input("Or local path (optional)", value="testdata/data.csv")
 top_n = st.sidebar.slider("Top N sectors", min_value=3, max_value=20, value=10)
 st.sidebar.markdown("---")
-st.sidebar.write("Tip: For the map, two-letter US state codes (e.g. 'CA', 'NY') work best. Full state names will be mapped automatically where possible.")
-st.sidebar.write("You can filter the dataset by year, sector, or state using the controls below.")
+st.sidebar.write("Tip: For the map, two-letter US state codes (e.g. 'CA', 'NY') work best — full state names are also accepted and will be mapped where possible.")
+st.sidebar.write("Filter the dataset by year, sector, or state using the controls below. Use the Preview to confirm your uploaded file's columns and a small sample.")
 
 df = None
 if uploaded is not None:
@@ -205,8 +209,10 @@ else:
 st.markdown("---")
 st.subheader("Predict Emissions — ML Model")
 with st.expander("Train or view model (uses state, sector, year)", expanded=True):
-    st.write("The app will train a Random Forest using the loaded dataset and report test accuracy (MSE, R²)."
-             " You can then enter a state, sector, and reporting year to get a prediction.")
+    st.write(
+        "This section auto-loads saved models from `outputs/` if present. If no saved model is found, the app will train models on the currently loaded dataset at startup and save them to `outputs/` for reuse.\n\n"
+        "Predictions are illustrative — they show model outputs given the dataset and are not a substitute for a validated emissions model."
+    )
     # Ensure session_state keys exist for both models
     if 'model_rf' not in st.session_state:
         st.session_state['model_rf'] = None
@@ -242,16 +248,17 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
     saved_rf = find_saved_model("outputs", prefix="model_rf_")
     if saved_rf and st.session_state.get('model_rf') is None:
         try:
-            st.session_state['model_rf'] = joblib.load(saved_rf)
+            with st.spinner(f"Loading saved Random Forest model from {saved_rf.name}..."):
+                st.session_state['model_rf'] = joblib.load(saved_rf)
             st.session_state['mse_rf'] = None
             st.session_state['r2_rf'] = None
-            st.success(f"Loaded Random Forest model from {saved_rf}")
+            st.info(f"Loaded Random Forest model: {saved_rf.name}")
         except Exception as e:
             st.warning(f"Found RF model at {saved_rf} but failed to load: {e}")
     elif saved_rf is None and st.session_state.get('model_rf') is None:
         # train RF at startup
         try:
-            with st.spinner("Training Random Forest on startup..."):
+            with st.spinner("No saved Random Forest found — training Random Forest (this may take a minute)..."):
                 m_rf, mse_rf, r2_rf = create_random_forest(df)
             st.session_state['model_rf'] = m_rf
             st.session_state['mse_rf'] = mse_rf
@@ -261,26 +268,27 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
             fname_rf = outdir / f"model_rf_{int(time.time())}.joblib"
             try:
                 joblib.dump(m_rf, fname_rf)
-                st.success(f"Trained RF model and saved to {fname_rf}")
+                st.info(f"Trained Random Forest and saved to {fname_rf.name}")
             except Exception as e:
-                st.warning(f"Trained RF model but failed to save to disk: {e}")
+                st.warning(f"Trained Random Forest but failed to save to disk: {e}")
         except Exception as e:
-            st.error(f"Automatic RF training failed: {e}")
+            st.error(f"Automatic Random Forest training failed: {e}")
 
     # LR
     saved_lr = find_saved_model("outputs", prefix="model_lr_")
     if saved_lr and st.session_state.get('model_lr') is None:
         try:
-            st.session_state['model_lr'] = joblib.load(saved_lr)
+            with st.spinner(f"Loading saved Linear Regression model from {saved_lr.name}..."):
+                st.session_state['model_lr'] = joblib.load(saved_lr)
             st.session_state['mse_lr'] = None
             st.session_state['r2_lr'] = None
-            st.success(f"Loaded Linear Regression model from {saved_lr}")
+            st.info(f"Loaded Linear Regression model: {saved_lr.name}")
         except Exception as e:
             st.warning(f"Found LR model at {saved_lr} but failed to load: {e}")
     elif saved_lr is None and st.session_state.get('model_lr') is None:
         # train LR at startup
         try:
-            with st.spinner("Training Linear Regression on startup..."):
+            with st.spinner("No saved Linear Regression found — training Linear Regression (fast)..."):
                 m_lr, mse_lr, r2_lr = create_linear_regression(df)
             st.session_state['model_lr'] = m_lr
             st.session_state['mse_lr'] = mse_lr
@@ -290,15 +298,15 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
             fname_lr = outdir / f"model_lr_{int(time.time())}.joblib"
             try:
                 joblib.dump(m_lr, fname_lr)
-                st.success(f"Trained LR model and saved to {fname_lr}")
+                st.info(f"Trained Linear Regression and saved to {fname_lr.name}")
             except Exception as e:
-                st.warning(f"Trained LR model but failed to save to disk: {e}")
+                st.warning(f"Trained Linear Regression but failed to save to disk: {e}")
         except Exception as e:
-            st.error(f"Automatic LR training failed: {e}")
+            st.error(f"Automatic Linear Regression training failed: {e}")
 
     # provide a single Clear button to reset the in-session models if needed
     col_clear = st.columns([1])[0]
-    if col_clear.button("Clear trained models"):
+    if col_clear.button("Clear cached models (force retrain on refresh)"):
         st.session_state['model_rf'] = None
         st.session_state['mse_rf'] = None
         st.session_state['r2_rf'] = None
@@ -351,9 +359,9 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
 
     year_input = st.number_input("Reporting year", min_value=1900, max_value=2100, value=int(default_year))
 
-    st.write("Predictions from both models (if available) will be shown below.")
+    st.write("Predictions from both models (if available) will be shown below. Click 'Run predictions' to compute outputs for the chosen inputs.")
 
-    if st.button("Predict emissions"):
+    if st.button("Run predictions"):
         preds = []
         # Random Forest prediction
         if st.session_state.get('model_rf') is not None:
