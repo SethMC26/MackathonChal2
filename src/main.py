@@ -1,7 +1,14 @@
 import argparse
 import sys
 import logging
-from model.data_process import create_linear_model, create_random_forest, predict_emissions, preprocess_data
+from model.data_process import (
+    preprocess_data,
+    create_random_forest,
+    random_forest_predict_emissions,
+    create_linear_regression,
+    linear_predict_emissions,
+    evaluate_model
+)
 
 VERSION = "0.1.0"
 
@@ -38,7 +45,7 @@ def main(argv=None):
             print(df)
 
         print("linear regression model")
-        print(create_linear_model(df))
+        print(create_linear_regression(df))
         
         # Create random forest model and store a copy of it for reference later so we dont recreate it
         model, mse, r2 = create_random_forest(df)

@@ -69,11 +69,15 @@ def create_linear_regression(data: pd.DataFrame) -> Tuple[LinearRegression, floa
 
     return (model, mse, r2)
 
-def linear_predict_emissions(model: LinearRegression, state: str, industry_sector: str, reporting_year: int) -> float:
+def linear_predict_emissions(model: LinearRegression, state: str, industry_sector: str, reporting_year: int, dataframe: pd.DataFrame) -> float:
+    state_centroids = dataframe.groupby('state')[['latitude', 'longitude']].mean()
+
     input_df = pd.DataFrame([{
         'state': state,
         'industry_sector': industry_sector,
-        'reporting_year': reporting_year
+        'reporting_year': reporting_year,
+        'latitude': state_centroids.loc[state, 'latitude'],
+        'longitude': state_centroids.loc[state, 'longitude']
     }])
 
     # One-hot encode the input data
@@ -106,12 +110,7 @@ def create_random_forest(data: pd.DataFrame) -> Tuple[RandomForestRegressor, flo
 
     return (model, mse, r2)
 
-def predict_emissions(model: RandomForestRegressor, state: str, industry_sector: str, reporting_year: int) -> float:
-    global dataframe
-    
-    if dataframe is None:
-        return -math.inf
-    # Example: fill missing coordinates using state averages
+def random_forest_predict_emissions(model: RandomForestRegressor, state: str, industry_sector: str, reporting_year: int, dataframe: pd.DataFrame) -> float:    
     state_centroids = dataframe.groupby('state')[['latitude', 'longitude']].mean()
 
     input_df = pd.DataFrame([{

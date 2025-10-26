@@ -13,7 +13,7 @@ from model.data_process import (
     random_forest_predict_emissions,
     create_linear_regression,
     linear_predict_emissions,
-    evaluate_model,           # <- added
+    evaluate_model
 )
 from model.analysis import (
     top_sectors,
@@ -379,7 +379,7 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
         # Random Forest prediction
         if st.session_state.get('model_rf') is not None:
             try:
-                pr = random_forest_predict_emissions(st.session_state['model_rf'], state_input, sector_input, int(year_input))
+                pr = random_forest_predict_emissions(st.session_state['model_rf'], state_input, sector_input, int(year_input), df)
                 preds.append(("Random Forest", pr))
             except Exception as e:
                 preds.append(("Random Forest", f"Error: {e}"))
@@ -389,7 +389,7 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
         # Linear Regression prediction
         if st.session_state.get('model_lr') is not None:
             try:
-                pl = linear_predict_emissions(st.session_state['model_lr'], state_input, sector_input, int(year_input))
+                pl = linear_predict_emissions(st.session_state['model_lr'], state_input, sector_input, int(year_input), df)
                 preds.append(("Linear Regression", pl))
             except Exception as e:
                 preds.append(("Linear Regression", f"Error: {e}"))
