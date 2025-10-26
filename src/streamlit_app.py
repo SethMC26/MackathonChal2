@@ -7,7 +7,13 @@ import joblib
 from pathlib import Path
 import time
 
-from model.data_process import preprocess_data, create_random_forest, predict_emissions
+from model.data_process import (
+    preprocess_data,
+    create_random_forest,
+    random_forest_predict_emissions,
+    create_linear_regression,
+    linear_predict_emissions,
+)
 from model.analysis import (
     top_sectors,
     emissions_by_state,
@@ -201,14 +207,18 @@ st.subheader("Predict Emissions — ML Model")
 with st.expander("Train or view model (uses state, sector, year)", expanded=True):
     st.write("The app will train a Random Forest using the loaded dataset and report test accuracy (MSE, R²)."
              " You can then enter a state, sector, and reporting year to get a prediction.")
-    # Use session_state to cache the trained model so it isn't retrained on every widget change
-    if 'model' not in st.session_state:
-        st.session_state['model'] = None
-        st.session_state['mse'] = None
-        st.session_state['r2'] = None
+    # Ensure session_state keys exist for both models
+    if 'model_rf' not in st.session_state:
+        st.session_state['model_rf'] = None
+        st.session_state['mse_rf'] = None
+        st.session_state['r2_rf'] = None
+    if 'model_lr' not in st.session_state:
+        st.session_state['model_lr'] = None
+        st.session_state['mse_lr'] = None
+        st.session_state['r2_lr'] = None
 
-    def find_saved_model(directory: str = "outputs"):
-        """Return Path to the newest model file in outputs if present (pkl, joblib, sav)."""
+    def find_saved_model(directory: str = "outputs", prefix: str = None):
+        """Return Path to the newest model file in outputs matching optional prefix if present (pkl, joblib, sav)."""
         p = Path(directory)
         if not p.exists() or not p.is_dir():
             return None
@@ -219,56 +229,100 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
             files.extend(p.glob(e))
         if not files:
             return None
+        if prefix:
+            files = [f for f in files if f.name.startswith(prefix)]
+            if not files:
+                return None
         # return the most recently modified
         files = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
         return files[0]
 
-    # Attempt to auto-load a saved model from outputs/ if available; otherwise train once and save it
-    saved_path = find_saved_model("outputs")
-    if saved_path and st.session_state.get('model') is None:
+    # Handle Random Forest and Linear Regression models separately
+    # RF
+    saved_rf = find_saved_model("outputs", prefix="model_rf_")
+    if saved_rf and st.session_state.get('model_rf') is None:
         try:
-            loaded = joblib.load(saved_path)
-            st.session_state['model'] = loaded
-            st.success(f"Loaded saved model from {saved_path}")
+            st.session_state['model_rf'] = joblib.load(saved_rf)
+            st.session_state['mse_rf'] = None
+            st.session_state['r2_rf'] = None
+            st.success(f"Loaded Random Forest model from {saved_rf}")
         except Exception as e:
-            st.warning(f"Found saved model at {saved_path} but failed to load: {e}")
-    elif saved_path is None and st.session_state.get('model') is None:
-        # No saved model found; train at startup and save
+            st.warning(f"Found RF model at {saved_rf} but failed to load: {e}")
+    elif saved_rf is None and st.session_state.get('model_rf') is None:
+        # train RF at startup
         try:
-            with st.spinner("No saved model found — training Random Forest on startup (this may take a little while)..."):
-                m, mse, r2 = create_random_forest(df)
-            st.session_state['model'] = m
-            st.session_state['mse'] = mse
-            st.session_state['r2'] = r2
-            # save to outputs
+            with st.spinner("Training Random Forest on startup..."):
+                m_rf, mse_rf, r2_rf = create_random_forest(df)
+            st.session_state['model_rf'] = m_rf
+            st.session_state['mse_rf'] = mse_rf
+            st.session_state['r2_rf'] = r2_rf
             outdir = Path("outputs")
             outdir.mkdir(parents=True, exist_ok=True)
-            fname = outdir / f"model_{int(time.time())}.joblib"
+            fname_rf = outdir / f"model_rf_{int(time.time())}.joblib"
             try:
-                joblib.dump(m, fname)
-                st.success(f"Trained model and saved to {fname}")
+                joblib.dump(m_rf, fname_rf)
+                st.success(f"Trained RF model and saved to {fname_rf}")
             except Exception as e:
-                st.warning(f"Trained model but failed to save to disk: {e}")
+                st.warning(f"Trained RF model but failed to save to disk: {e}")
         except Exception as e:
-            st.error(f"Automatic training failed: {e}")
+            st.error(f"Automatic RF training failed: {e}")
 
-    # provide a single Clear button to reset the in-session model if needed
-    col_clear = st.columns([1])[0]
-    if col_clear.button("Clear trained model"):
-        st.session_state['model'] = None
-        st.session_state['mse'] = None
-        st.session_state['r2'] = None
-
-    # show metrics if model available
-    if st.session_state.get('model') is not None:
+    # LR
+    saved_lr = find_saved_model("outputs", prefix="model_lr_")
+    if saved_lr and st.session_state.get('model_lr') is None:
         try:
-            if st.session_state.get('r2') is not None:
-                st.metric("Test R²", f"{st.session_state['r2']:.3f}")
-            if st.session_state.get('mse') is not None:
-                st.write(f"Test MSE: {st.session_state['mse']:.2f}")
+            st.session_state['model_lr'] = joblib.load(saved_lr)
+            st.session_state['mse_lr'] = None
+            st.session_state['r2_lr'] = None
+            st.success(f"Loaded Linear Regression model from {saved_lr}")
+        except Exception as e:
+            st.warning(f"Found LR model at {saved_lr} but failed to load: {e}")
+    elif saved_lr is None and st.session_state.get('model_lr') is None:
+        # train LR at startup
+        try:
+            with st.spinner("Training Linear Regression on startup..."):
+                m_lr, mse_lr, r2_lr = create_linear_regression(df)
+            st.session_state['model_lr'] = m_lr
+            st.session_state['mse_lr'] = mse_lr
+            st.session_state['r2_lr'] = r2_lr
+            outdir = Path("outputs")
+            outdir.mkdir(parents=True, exist_ok=True)
+            fname_lr = outdir / f"model_lr_{int(time.time())}.joblib"
+            try:
+                joblib.dump(m_lr, fname_lr)
+                st.success(f"Trained LR model and saved to {fname_lr}")
+            except Exception as e:
+                st.warning(f"Trained LR model but failed to save to disk: {e}")
+        except Exception as e:
+            st.error(f"Automatic LR training failed: {e}")
+
+    # provide a single Clear button to reset the in-session models if needed
+    col_clear = st.columns([1])[0]
+    if col_clear.button("Clear trained models"):
+        st.session_state['model_rf'] = None
+        st.session_state['mse_rf'] = None
+        st.session_state['r2_rf'] = None
+        st.session_state['model_lr'] = None
+        st.session_state['mse_lr'] = None
+        st.session_state['r2_lr'] = None
+
+    # show metrics for available models
+    if st.session_state.get('model_rf') is not None:
+        try:
+            if st.session_state.get('r2_rf') is not None:
+                st.metric("Random Forest Test R²", f"{st.session_state['r2_rf']:.3f}")
+            if st.session_state.get('mse_rf') is not None:
+                st.write(f"Random Forest Test MSE: {st.session_state['mse_rf']:.2f}")
         except Exception:
-            # in case values are not numeric
-            st.write("Model available in session.")
+            st.write("Random Forest model available in session.")
+    if st.session_state.get('model_lr') is not None:
+        try:
+            if st.session_state.get('r2_lr') is not None:
+                st.metric("Linear Regression Test R²", f"{st.session_state['r2_lr']:.3f}")
+            if st.session_state.get('mse_lr') is not None:
+                st.write(f"Linear Regression Test MSE: {st.session_state['mse_lr']:.2f}")
+        except Exception:
+            st.write("Linear Regression model available in session.")
 
     # user inputs for prediction
     st.markdown("**Single prediction**")
@@ -297,15 +351,23 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
 
     year_input = st.number_input("Reporting year", min_value=1900, max_value=2100, value=int(default_year))
 
+    model_choice = st.selectbox("Choose model for prediction", options=["Random Forest", "Linear Regression"], index=0)
+
     if st.button("Predict emissions"):
-        model = st.session_state.get('model')
+        if model_choice == "Random Forest":
+            model = st.session_state.get('model_rf')
+            predict_fn = random_forest_predict_emissions
+        else:
+            model = st.session_state.get('model_lr')
+            predict_fn = linear_predict_emissions
+
         if model is None:
-            st.error("No trained model available to make predictions. Train the model first or load a trained model into the session.")
+            st.error("No trained model available to make predictions. Model not loaded or trained.")
         else:
             try:
-                pred = predict_emissions(model, state_input, sector_input, int(year_input))
+                pred = predict_fn(model, state_input, sector_input, int(year_input))
                 st.success(f"Predicted total GHG emissions: {pred:,.0f} tonnes")
-                st.write("Note: predictions are based on a Random Forest trained on the currently loaded dataset; treat as illustrative.")
+                st.write(f"Note: predictions are based on the {model_choice} trained on the currently loaded dataset; treat as illustrative.")
             except Exception as e:
                 st.error(f"Prediction failed: {e}")
 
