@@ -51,29 +51,21 @@ def main(argv=None):
         model, mse, r2 = create_random_forest(df)
         print(f"Random Forest Model created. MSE: {mse}, R2: {r2}")
 
-        print("Predicting emissions for state='CA', industry_sector='Energy', reporting_year=2020")
-        print(predict_emissions(model, 'CA', 'Energy', 2020))
+        print("Predicting emissions for state='TX', industry_sector='Waste', reporting_year=2020")
+        print(random_forest_predict_emissions(model, 'TX', 'Waste', 2020, df))
 
-        print("Predicting emissions for state='TX', industry_sector='Transportation', reporting_year=2021")
-        print(predict_emissions(model, 'TX', 'Transportation', 2021))
+        print("Predicting emissions for state='TX', industry_sector='Waste', reporting_year=2021")
+        print(random_forest_predict_emissions(model, 'TX', 'Waste', 2021, df))
+        print("Predicting emissions for state='TX', industry_sector='Waste', reporting_year=2022")
+        print(random_forest_predict_emissions(model, 'TX', 'Waste', 2022, df))
+        print("Predicting emissions for state='TX', industry_sector='Waste', reporting_year=2023")
+        print(random_forest_predict_emissions(model, 'TX', 'Waste', 2023, df))
+        print("Predicting emissions for state='TX', industry_sector='Waste', reporting_year=2024")
+        print(random_forest_predict_emissions(model, 'TX', 'Waste', 2024, df))
+        print("Predicting emissions for state='TX', industry_sector='Waste', reporting_year=2025")
+        print(random_forest_predict_emissions(model, 'TX', 'Waste', 2025, df))
 
-        print("Predicting emissions for state='NY', industry_sector='Residential', reporting_year=2022")
-        print(predict_emissions(model, 'NY', 'Residential', 2022))
 
-        print("Predicting emissions for state='FL', industry_sector='Agriculture', reporting_year=2019")
-        print(predict_emissions(model, 'FL', 'Agriculture', 2019))
-
-        print("Predicting emissions for state='IL', industry_sector='Manufacturing', reporting_year=2018")
-        print(predict_emissions(model, 'IL', 'Manufacturing', 2018))
-
-        print("Predicting emissions for state='WA', industry_sector='Construction', reporting_year=2023")
-        print(predict_emissions(model, 'WA', 'Construction', 2023))
-
-        print("Predicting emissions for state='NV', industry_sector='Mining', reporting_year=2024")
-        print(predict_emissions(model, 'NV', 'Mining', 2024))
-
-        print("Predicting emissions for state='OH', industry_sector='Healthcare', reporting_year=2015")
-        print(predict_emissions(model, 'OH', 'Healthcare', 2015))
 
         
     except Exception as e:
