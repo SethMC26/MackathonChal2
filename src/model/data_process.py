@@ -1,6 +1,6 @@
 # general preprocessing functions for the data 
 import logging
-from typing import Tuple
+from typing import Tuple, Optional
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
@@ -110,3 +110,22 @@ def random_forest_predict_emissions(model: RandomForestRegressor, state: str, in
 
     prediction = model.predict(input_d)
     return prediction[0]
+
+def evaluate_model(model, data: pd.DataFrame) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Evaluate a trained sklearn model on a holdout test split derived from `data`.
+    Returns (mse, r2) or (None, None) on failure.
+    """
+    try:
+        x_train_d, x_test_d, y_train, y_test = __preprocess_for_model(data)
+        # align test matrix with model's expected features if possible
+        if hasattr(model, "feature_names_in_"):
+            features = list(model.feature_names_in_)
+            x_test_d = x_test_d.reindex(columns=features, fill_value=0)
+        preds = model.predict(x_test_d)
+        mse = mean_squared_error(y_test, preds)
+        r2 = r2_score(y_test, preds)
+        return mse, r2
+    except Exception:
+        logging.exception("evaluate_model failed")
+        return None, None

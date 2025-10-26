@@ -13,6 +13,7 @@ from model.data_process import (
     random_forest_predict_emissions,
     create_linear_regression,
     linear_predict_emissions,
+    evaluate_model,           # <- added
 )
 from model.analysis import (
     top_sectors,
@@ -250,8 +251,14 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
         try:
             with st.spinner(f"Loading saved Random Forest model from {saved_rf.name}..."):
                 st.session_state['model_rf'] = joblib.load(saved_rf)
-            st.session_state['mse_rf'] = None
-            st.session_state['r2_rf'] = None
+            # compute metrics on current dataset if possible
+            try:
+                mse_rf, r2_rf = evaluate_model(st.session_state['model_rf'], df)
+                st.session_state['mse_rf'] = mse_rf
+                st.session_state['r2_rf'] = r2_rf
+            except Exception:
+                st.session_state['mse_rf'] = None
+                st.session_state['r2_rf'] = None
             st.info(f"Loaded Random Forest model: {saved_rf.name}")
         except Exception as e:
             st.warning(f"Found RF model at {saved_rf} but failed to load: {e}")
@@ -280,8 +287,14 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
         try:
             with st.spinner(f"Loading saved Linear Regression model from {saved_lr.name}..."):
                 st.session_state['model_lr'] = joblib.load(saved_lr)
-            st.session_state['mse_lr'] = None
-            st.session_state['r2_lr'] = None
+            # compute metrics on current dataset if possible
+            try:
+                mse_lr, r2_lr = evaluate_model(st.session_state['model_lr'], df)
+                st.session_state['mse_lr'] = mse_lr
+                st.session_state['r2_lr'] = r2_lr
+            except Exception:
+                st.session_state['mse_lr'] = None
+                st.session_state['r2_lr'] = None
             st.info(f"Loaded Linear Regression model: {saved_lr.name}")
         except Exception as e:
             st.warning(f"Found LR model at {saved_lr} but failed to load: {e}")
