@@ -518,11 +518,9 @@ if not sectors_df.empty:
 
     top10_share = sec.head(10)[EM_COL].sum() / sec[EM_COL].sum() * 100
 
-    col_a, col_b = st.columns([1, 2])
-    with col_a:
-        st.metric("Top 10 sectors share", f"{top10_share:.1f}%")
-        st.write("Top sectors (by total)")
-        st.dataframe(sec.head(10).assign(**{EM_COL: sec[EM_COL].map(fmt_int)}))
+    st.metric("Top 10 sectors share", f"{top10_share:.1f}%")
+    st.write("Top sectors (by total)")
+    st.dataframe(sec.head(10).assign(**{EM_COL: sec[EM_COL].map(fmt_int)}))
 
     # Pareto chart: bars + cumulative line
     pareto = go.Figure()
