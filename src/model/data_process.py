@@ -127,10 +127,6 @@ def random_forest_predict_emissions(model: RandomForestRegressor, state: str, in
     input_d = pd.get_dummies(input_df, drop_first=False)
     input_d = input_d.reindex(columns=df_columns, fill_value=0)
 
-    # Align input columns with model training columns
-    model_features = model.feature_names_in_
-    # input_d = input_d.reindex(columns=model_features, fill_value=0)
-
     prediction = model.predict(input_d)
     return prediction[0]
 
