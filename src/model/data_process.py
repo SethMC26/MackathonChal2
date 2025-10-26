@@ -4,12 +4,15 @@ from typing import Tuple
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
-
-from sklearn.metrics import mean_squared_error
-from sklearn.metrics import r2_score
+from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.linear_model import LinearRegression
+from typing import Tuple
+import math
+
+dataframe = None
 
 def preprocess_data(file: str) -> pd.DataFrame:
+    global dataframe
     try:
         # pass the path directly to pandas
         dataframe = pd.read_csv(file)
@@ -24,24 +27,23 @@ def preprocess_data(file: str) -> pd.DataFrame:
         logging.exception("preprocess_data: failed to read/parse file: %s", file)
         return None
 
-def __preprocess_for_model(data: pd.DataFrame) -> Tuple[pd.DataFrame]:
+def __preprocess_for_model(data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     # get features and target
     target_var = 'total_ghg_emissions_tonnes'
-    feature_vars = ['state', 'industry_sector', 'reporting_year']
+    feature_vars = ['industry_sector', 'latitude', 'longitude', 'reporting_year']
+
     
     # slice data
     x = data[feature_vars]
     y = data[target_var]
     
-     # split into train and test
+    # split into train and test
     x_train, x_test, y_train, y_test = train_test_split(
-        x, y, test_size=0.2, random_state=42)
+        x, y, test_size=0.2, random_state=42
+    )
 
-    # HANDLE non numeric data 
-    # One-hot encode categoricals on TRAIN only
+    # One-hot encode categoricals
     x_train_d = pd.get_dummies(x_train, drop_first=False)
-    
-    # Recreate the same columns for TEST
     x_test_d = pd.get_dummies(x_test, drop_first=False)
     x_test_d = x_test_d.reindex(columns=x_train_d.columns, fill_value=0)
 
@@ -59,6 +61,11 @@ def create_linear_model(data: pd.DataFrame) -> Tuple[LinearRegression, float, fl
     mse = mean_squared_error(y_test, preds)
     r2 = r2_score(y_test, preds)
     logging.info(f"Linear Model - MSE: {mse}, R2: {r2}")
+    
+    predsT = model.predict(x_train)
+    mseT = mean_squared_error(y_train, predsT)
+    r2T = r2_score(y_train, predsT)
+    logging.info(f"Linear Model - MSE(train): {mseT}, R2(train): {r2T}")   
 
     return (model, mse, r2)
 
@@ -74,15 +81,29 @@ def create_random_forest(data: pd.DataFrame) -> Tuple[RandomForestRegressor, flo
     mse = mean_squared_error(y_test, preds)
     r2 = r2_score(y_test, preds)
     logging.info(f"Random Forest Model - MSE: {mse}, R2: {r2}")
+    
+    predsT = model.predict(x_train)
+    mseT = mean_squared_error(y_train, predsT)
+    r2T = r2_score(y_train, predsT)
+    logging.info(f"Random Forest Model - MSE(train): {mseT}, R2(train): {r2T}")    
 
     return (model, mse, r2)
 
 def predict_emissions(model: RandomForestRegressor, state: str, industry_sector: str, reporting_year: int) -> float:
+    global dataframe
+    
+    if dataframe is None:
+        return -math.inf
+    # Example: fill missing coordinates using state averages
+    state_centroids = dataframe.groupby('state')[['latitude', 'longitude']].mean()
+
     input_df = pd.DataFrame([{
         'state': state,
         'industry_sector': industry_sector,
-        'reporting_year': str(reporting_year)
-    }])
+        'reporting_year': reporting_year,
+        'latitude': state_centroids.loc[state, 'latitude'],
+        'longitude': state_centroids.loc[state, 'longitude']
+    }])    
 
     # One-hot encode the input data
     input_d = pd.get_dummies(input_df, drop_first=False)
