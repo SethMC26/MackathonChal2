@@ -47,7 +47,7 @@ def __preprocess_for_model(data: pd.DataFrame) -> Tuple[pd.DataFrame]:
 
     return (x_train_d, x_test_d, y_train, y_test)
 
-def create_linear_model(data: pd.DataFrame) -> Tuple[LinearRegression, float, float]:
+def create_linear_regression(data: pd.DataFrame) -> Tuple[LinearRegression, float, float]:
     x_train, x_test, y_train, y_test = __preprocess_for_model(data)
 
     # create and train model
@@ -61,6 +61,23 @@ def create_linear_model(data: pd.DataFrame) -> Tuple[LinearRegression, float, fl
     logging.info(f"Linear Model - MSE: {mse}, R2: {r2}")
 
     return (model, mse, r2)
+
+def linear_predict_emissions(model: LinearRegression, state: str, industry_sector: str, reporting_year: int) -> float:
+    input_df = pd.DataFrame([{
+        'state': state,
+        'industry_sector': industry_sector,
+        'reporting_year': reporting_year
+    }])
+
+    # One-hot encode the input data
+    input_d = pd.get_dummies(input_df, drop_first=False)
+
+    # Align input columns with model training columns
+    model_features = model.feature_names_in_
+    input_d = input_d.reindex(columns=model_features, fill_value=0)
+
+    prediction = model.predict(input_d)
+    return prediction[0]
 
 def create_random_forest(data: pd.DataFrame) -> Tuple[RandomForestRegressor, float, float]:
     x_train, x_test, y_train, y_test = __preprocess_for_model(data)
@@ -77,11 +94,11 @@ def create_random_forest(data: pd.DataFrame) -> Tuple[RandomForestRegressor, flo
 
     return (model, mse, r2)
 
-def predict_emissions(model: RandomForestRegressor, state: str, industry_sector: str, reporting_year: int) -> float:
+def random_forest_predict_emissions(model: RandomForestRegressor, state: str, industry_sector: str, reporting_year: int) -> float:
     input_df = pd.DataFrame([{
         'state': state,
         'industry_sector': industry_sector,
-        'reporting_year': str(reporting_year)
+        'reporting_year': reporting_year
     }])
 
     # One-hot encode the input data

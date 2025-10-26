@@ -3,8 +3,17 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import joblib
+from pathlib import Path
+import time
 
-from model.data_process import preprocess_data, create_random_forest, predict_emissions
+from model.data_process import (
+    preprocess_data,
+    create_random_forest,
+    random_forest_predict_emissions,
+    create_linear_regression,
+    linear_predict_emissions,
+)
 from model.analysis import (
     top_sectors,
     emissions_by_state,
@@ -17,16 +26,20 @@ from model.analysis import (
 )
 
 st.set_page_config(page_title="GHG Explorer", layout="wide")
-st.title("GHG Explorer — Top sectors, state choropleth, and yearly trends")
-st.markdown("Upload a CSV or use the bundled sample (testdata/data.csv). Columns expected: facility_name, state, industry_sector, total_ghg_emissions_tonnes, latitude, longitude, reporting_year")
+st.title("GHG Explorer — Top sectors, choropleth, trends, and predictive models")
+st.markdown(
+    "Upload a CSV or use the bundled sample (`testdata/data.csv`).\n\n"
+    "Required columns (any reasonable variant will be mapped): `facility_name`, `state` (abbr or full name), `industry_sector`, `total_ghg_emissions_tonnes`, `latitude`, `longitude`, `reporting_year`.\n\n"
+    "The app will auto-train or load saved ML models (Random Forest and Linear Regression) on the loaded dataset and allow single-row predictions."
+)
 
 # Move uploader and basic controls to the sidebar for clearer main layout
 uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"]) 
 path = st.sidebar.text_input("Or local path (optional)", value="testdata/data.csv")
 top_n = st.sidebar.slider("Top N sectors", min_value=3, max_value=20, value=10)
 st.sidebar.markdown("---")
-st.sidebar.write("Tip: For the map, two-letter US state codes (e.g. 'CA', 'NY') work best. Full state names will be mapped automatically where possible.")
-st.sidebar.write("You can filter the dataset by year, sector, or state using the controls below.")
+st.sidebar.write("Tip: For the map, two-letter US state codes (e.g. 'CA', 'NY') work best — full state names are also accepted and will be mapped where possible.")
+st.sidebar.write("Filter the dataset by year, sector, or state using the controls below. Use the Preview to confirm your uploaded file's columns and a small sample.")
 
 df = None
 if uploaded is not None:
@@ -196,41 +209,128 @@ else:
 st.markdown("---")
 st.subheader("Predict Emissions — ML Model")
 with st.expander("Train or view model (uses state, sector, year)", expanded=True):
-    st.write("The app will train a Random Forest using the loaded dataset and report test accuracy (MSE, R²)."
-             " You can then enter a state, sector, and reporting year to get a prediction.")
-    # Use session_state to cache the trained model so it isn't retrained on every widget change
-    if 'model' not in st.session_state:
-        st.session_state['model'] = None
-        st.session_state['mse'] = None
-        st.session_state['r2'] = None
+    st.write(
+        "This section auto-loads saved models from `outputs/` if present. If no saved model is found, the app will train models on the currently loaded dataset at startup and save them to `outputs/` for reuse.\n\n"
+        "Predictions are illustrative — they show model outputs given the dataset and are not a substitute for a validated emissions model."
+    )
+    # Ensure session_state keys exist for both models
+    if 'model_rf' not in st.session_state:
+        st.session_state['model_rf'] = None
+        st.session_state['mse_rf'] = None
+        st.session_state['r2_rf'] = None
+    if 'model_lr' not in st.session_state:
+        st.session_state['model_lr'] = None
+        st.session_state['mse_lr'] = None
+        st.session_state['r2_lr'] = None
 
-    col_train, col_clear = st.columns([1, 1])
-    with col_train:
-        if st.button("Train model"):
-            try:
-                with st.spinner("Training Random Forest model — this may take a few seconds..."):
-                    m, mse, r2 = create_random_forest(df)
-                st.session_state['model'] = m
-                st.session_state['mse'] = mse
-                st.session_state['r2'] = r2
-            except Exception as e:
-                st.error(f"Model training failed: {e}")
-    with col_clear:
-        if st.button("Clear trained model"):
-            st.session_state['model'] = None
-            st.session_state['mse'] = None
-            st.session_state['r2'] = None
+    def find_saved_model(directory: str = "outputs", prefix: str = None):
+        """Return Path to the newest model file in outputs matching optional prefix if present (pkl, joblib, sav)."""
+        p = Path(directory)
+        if not p.exists() or not p.is_dir():
+            return None
+        # candidate extensions
+        exts = ("*.pkl", "*.joblib", "*.sav", "*.pickle")
+        files = []
+        for e in exts:
+            files.extend(p.glob(e))
+        if not files:
+            return None
+        if prefix:
+            files = [f for f in files if f.name.startswith(prefix)]
+            if not files:
+                return None
+        # return the most recently modified
+        files = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
+        return files[0]
 
-    # show metrics if model available
-    if st.session_state.get('model') is not None:
+    # Handle Random Forest and Linear Regression models separately
+    # RF
+    saved_rf = find_saved_model("outputs", prefix="model_rf_")
+    if saved_rf and st.session_state.get('model_rf') is None:
         try:
-            st.metric("Test R²", f"{st.session_state['r2']:.3f}")
-            st.write(f"Test MSE: {st.session_state['mse']:.2f}")
+            with st.spinner(f"Loading saved Random Forest model from {saved_rf.name}..."):
+                st.session_state['model_rf'] = joblib.load(saved_rf)
+            st.session_state['mse_rf'] = None
+            st.session_state['r2_rf'] = None
+            st.info(f"Loaded Random Forest model: {saved_rf.name}")
+        except Exception as e:
+            st.warning(f"Found RF model at {saved_rf} but failed to load: {e}")
+    elif saved_rf is None and st.session_state.get('model_rf') is None:
+        # train RF at startup
+        try:
+            with st.spinner("No saved Random Forest found — training Random Forest (this may take a minute)..."):
+                m_rf, mse_rf, r2_rf = create_random_forest(df)
+            st.session_state['model_rf'] = m_rf
+            st.session_state['mse_rf'] = mse_rf
+            st.session_state['r2_rf'] = r2_rf
+            outdir = Path("outputs")
+            outdir.mkdir(parents=True, exist_ok=True)
+            fname_rf = outdir / f"model_rf_{int(time.time())}.joblib"
+            try:
+                joblib.dump(m_rf, fname_rf)
+                st.info(f"Trained Random Forest and saved to {fname_rf.name}")
+            except Exception as e:
+                st.warning(f"Trained Random Forest but failed to save to disk: {e}")
+        except Exception as e:
+            st.error(f"Automatic Random Forest training failed: {e}")
+
+    # LR
+    saved_lr = find_saved_model("outputs", prefix="model_lr_")
+    if saved_lr and st.session_state.get('model_lr') is None:
+        try:
+            with st.spinner(f"Loading saved Linear Regression model from {saved_lr.name}..."):
+                st.session_state['model_lr'] = joblib.load(saved_lr)
+            st.session_state['mse_lr'] = None
+            st.session_state['r2_lr'] = None
+            st.info(f"Loaded Linear Regression model: {saved_lr.name}")
+        except Exception as e:
+            st.warning(f"Found LR model at {saved_lr} but failed to load: {e}")
+    elif saved_lr is None and st.session_state.get('model_lr') is None:
+        # train LR at startup
+        try:
+            with st.spinner("No saved Linear Regression found — training Linear Regression (fast)..."):
+                m_lr, mse_lr, r2_lr = create_linear_regression(df)
+            st.session_state['model_lr'] = m_lr
+            st.session_state['mse_lr'] = mse_lr
+            st.session_state['r2_lr'] = r2_lr
+            outdir = Path("outputs")
+            outdir.mkdir(parents=True, exist_ok=True)
+            fname_lr = outdir / f"model_lr_{int(time.time())}.joblib"
+            try:
+                joblib.dump(m_lr, fname_lr)
+                st.info(f"Trained Linear Regression and saved to {fname_lr.name}")
+            except Exception as e:
+                st.warning(f"Trained Linear Regression but failed to save to disk: {e}")
+        except Exception as e:
+            st.error(f"Automatic Linear Regression training failed: {e}")
+
+    # provide a single Clear button to reset the in-session models if needed
+    col_clear = st.columns([1])[0]
+    if col_clear.button("Clear cached models (force retrain on refresh)"):
+        st.session_state['model_rf'] = None
+        st.session_state['mse_rf'] = None
+        st.session_state['r2_rf'] = None
+        st.session_state['model_lr'] = None
+        st.session_state['mse_lr'] = None
+        st.session_state['r2_lr'] = None
+
+    # show metrics for available models
+    if st.session_state.get('model_rf') is not None:
+        try:
+            if st.session_state.get('r2_rf') is not None:
+                st.metric("Random Forest Test R²", f"{st.session_state['r2_rf']:.3f}")
+            if st.session_state.get('mse_rf') is not None:
+                st.write(f"Random Forest Test MSE: {st.session_state['mse_rf']:.2f}")
         except Exception:
-            # in case values are not numeric
-            st.write("Model trained — test metrics unavailable")
-    else:
-        st.info("No trained model in session. Click 'Train model' to train once; it will be cached for this session.")
+            st.write("Random Forest model available in session.")
+    if st.session_state.get('model_lr') is not None:
+        try:
+            if st.session_state.get('r2_lr') is not None:
+                st.metric("Linear Regression Test R²", f"{st.session_state['r2_lr']:.3f}")
+            if st.session_state.get('mse_lr') is not None:
+                st.write(f"Linear Regression Test MSE: {st.session_state['mse_lr']:.2f}")
+        except Exception:
+            st.write("Linear Regression model available in session.")
 
     # user inputs for prediction
     st.markdown("**Single prediction**")
@@ -259,17 +359,38 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
 
     year_input = st.number_input("Reporting year", min_value=1900, max_value=2100, value=int(default_year))
 
-    if st.button("Predict emissions"):
-        model = st.session_state.get('model')
-        if model is None:
-            st.error("No trained model available to make predictions. Train the model first or load a trained model into the session.")
-        else:
+    st.write("Predictions from both models (if available) will be shown below. Click 'Run predictions' to compute outputs for the chosen inputs.")
+
+    if st.button("Run predictions"):
+        preds = []
+        # Random Forest prediction
+        if st.session_state.get('model_rf') is not None:
             try:
-                pred = predict_emissions(model, state_input, sector_input, int(year_input))
-                st.success(f"Predicted total GHG emissions: {pred:,.0f} tonnes")
-                st.write("Note: predictions are based on a Random Forest trained on the currently loaded dataset; treat as illustrative.")
+                pr = random_forest_predict_emissions(st.session_state['model_rf'], state_input, sector_input, int(year_input))
+                preds.append(("Random Forest", pr))
             except Exception as e:
-                st.error(f"Prediction failed: {e}")
+                preds.append(("Random Forest", f"Error: {e}"))
+        else:
+            preds.append(("Random Forest", "Model not available"))
+
+        # Linear Regression prediction
+        if st.session_state.get('model_lr') is not None:
+            try:
+                pl = linear_predict_emissions(st.session_state['model_lr'], state_input, sector_input, int(year_input))
+                preds.append(("Linear Regression", pl))
+            except Exception as e:
+                preds.append(("Linear Regression", f"Error: {e}"))
+        else:
+            preds.append(("Linear Regression", "Model not available"))
+
+        # display results side-by-side when both present
+        cols = st.columns(len(preds))
+        for (name, val), col in zip(preds, cols):
+            if isinstance(val, (int, float, np.floating, np.integer)):
+                col.metric(name, f"{val:,.0f} tonnes")
+            else:
+                col.write(f"{name}: {val}")
+        st.write("Note: predictions are illustrative and depend on how the models were trained on the current dataset.")
 
 # Emissions change 2021 -> 2023 (if years present)
 st.markdown("---")
