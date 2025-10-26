@@ -13,6 +13,7 @@ from model.data_process import (
     random_forest_predict_emissions,
     create_linear_regression,
     linear_predict_emissions,
+    evaluate_model,           # <- added
 )
 from model.analysis import (
     top_sectors,
@@ -250,8 +251,14 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
         try:
             with st.spinner(f"Loading saved Random Forest model from {saved_rf.name}..."):
                 st.session_state['model_rf'] = joblib.load(saved_rf)
-            st.session_state['mse_rf'] = None
-            st.session_state['r2_rf'] = None
+            # compute metrics on current dataset if possible
+            try:
+                mse_rf, r2_rf = evaluate_model(st.session_state['model_rf'], df)
+                st.session_state['mse_rf'] = mse_rf
+                st.session_state['r2_rf'] = r2_rf
+            except Exception:
+                st.session_state['mse_rf'] = None
+                st.session_state['r2_rf'] = None
             st.info(f"Loaded Random Forest model: {saved_rf.name}")
         except Exception as e:
             st.warning(f"Found RF model at {saved_rf} but failed to load: {e}")
@@ -280,8 +287,14 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
         try:
             with st.spinner(f"Loading saved Linear Regression model from {saved_lr.name}..."):
                 st.session_state['model_lr'] = joblib.load(saved_lr)
-            st.session_state['mse_lr'] = None
-            st.session_state['r2_lr'] = None
+            # compute metrics on current dataset if possible
+            try:
+                mse_lr, r2_lr = evaluate_model(st.session_state['model_lr'], df)
+                st.session_state['mse_lr'] = mse_lr
+                st.session_state['r2_lr'] = r2_lr
+            except Exception:
+                st.session_state['mse_lr'] = None
+                st.session_state['r2_lr'] = None
             st.info(f"Loaded Linear Regression model: {saved_lr.name}")
         except Exception as e:
             st.warning(f"Found LR model at {saved_lr} but failed to load: {e}")
@@ -464,3 +477,90 @@ else:
             st.plotly_chart(fig_map_out, use_container_width=True)
         else:
             st.info("Outliers found but no latitude/longitude available to map them.")
+
+# BEGIN Inserted: Drivers of Emissions analysis & visuals
+st.markdown("---")
+st.subheader("Drivers of Emissions — contribution, Pareto, and top contributors")
+
+# Sector contribution and Pareto
+if not sectors_df.empty:
+    sec = sectors_df[[SECTOR_COL, EM_COL]].copy()
+    sec = sec.sort_values(by=EM_COL, ascending=False).reset_index(drop=True)
+    sec["pct"] = sec[EM_COL] / sec[EM_COL].sum() * 100
+    sec["cumulative_pct"] = sec["pct"].cumsum()
+
+    top10_share = sec.head(10)[EM_COL].sum() / sec[EM_COL].sum() * 100
+
+    col_a, col_b = st.columns([1, 2])
+    with col_a:
+        st.metric("Top 10 sectors share", f"{top10_share:.1f}%")
+        st.write("Top sectors (by total)")
+        st.dataframe(sec.head(10).assign(**{EM_COL: sec[EM_COL].map(fmt_int)}))
+
+    # Pareto chart: bars + cumulative line
+    pareto = go.Figure()
+    pareto.add_trace(go.Bar(x=sec[SECTOR_COL], y=sec[EM_COL], name="Emissions", marker_color=px.colors.sequential.Turbo))
+    pareto.add_trace(go.Scatter(x=sec[SECTOR_COL], y=sec["cumulative_pct"], name="Cumulative %", yaxis="y2", mode="lines+markers", line=dict(color="#ff7f0e")))
+    pareto.update_layout(
+        title="Sector Pareto — contributions and cumulative share",
+        xaxis_tickangle=-45,
+        yaxis=dict(title="Total GHG (tonnes)", tickformat=","),
+        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 110]),
+        template="plotly_white",
+        margin=dict(l=80, r=80, t=50, b=160),
+        height=520,
+    )
+    st.plotly_chart(pareto, use_container_width=True)
+
+# State contribution and Pareto
+states_for_pareto = states_mapped_df.copy()
+if not states_for_pareto.empty:
+    st.write("Top states by contribution")
+    st.dataframe(states_for_pareto.head(10).assign(**{EM_COL: states_for_pareto[EM_COL].map(fmt_int)}))
+
+    s = states_for_pareto[[STATE_COL, EM_COL]].sort_values(by=EM_COL, ascending=False).reset_index(drop=True)
+    s["pct"] = s[EM_COL] / s[EM_COL].sum() * 100
+    s["cumulative_pct"] = s["pct"].cumsum()
+
+    pareto_states = go.Figure()
+    pareto_states.add_trace(go.Bar(x=s[STATE_COL], y=s[EM_COL], name="Emissions", marker_color=px.colors.sequential.Cividis))
+    pareto_states.add_trace(go.Scatter(x=s[STATE_COL], y=s["cumulative_pct"], name="Cumulative %", yaxis="y2", mode="lines+markers", line=dict(color="#2ca02c")))
+    pareto_states.update_layout(
+        title="State Pareto — contributions and cumulative share",
+        xaxis_tickangle=-45,
+        yaxis=dict(title="Total GHG (tonnes)"),
+        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 110]),
+        template="plotly_white",
+        margin=dict(l=80, r=80, t=50, b=150),
+        height=480,
+    )
+    st.plotly_chart(pareto_states, use_container_width=True)
+
+# Top state x sector contributors and treemap / heatmap
+ss = filtered_df.groupby([STATE_COL, SECTOR_COL], dropna=True)[EM_COL].sum().reset_index()
+if not ss.empty:
+    top_pairs = ss.sort_values(by=EM_COL, ascending=False).head(50).reset_index(drop=True)
+    st.subheader("Top State × Sector contributors")
+    st.write("Top combinations by total emissions")
+    st.dataframe(top_pairs.head(20).assign(**{EM_COL: top_pairs[EM_COL].map(fmt_int)}))
+
+    # Treemap for composition
+    treemap = px.treemap(top_pairs, path=[STATE_COL, SECTOR_COL], values=EM_COL,
+                         color=EM_COL, color_continuous_scale="Viridis",
+                         title="Treemap: State → Sector contributions")
+    treemap.update_layout(margin=dict(t=50, l=10, r=10, b=10), height=600)
+    st.plotly_chart(treemap, use_container_width=True)
+
+    # Pivot heatmap for a compact view (states x sectors)
+    pivot = top_pairs.pivot_table(index=STATE_COL, columns=SECTOR_COL, values=EM_COL, fill_value=0)
+    # keep only top N states/sectors for readability
+    top_state_idx = pivot.sum(axis=1).sort_values(ascending=False).head(12).index
+    top_sector_idx = pivot.sum(axis=0).sort_values(ascending=False).head(12).index
+    pivot_small = pivot.loc[top_state_idx, top_sector_idx]
+    if not pivot_small.empty:
+        hm = px.imshow(pivot_small, labels=dict(x="Sector", y="State", color="Emissions"),
+                       color_continuous_scale="Cividis", aspect="auto",
+                       title="Heatmap: emissions by State (rows) × Sector (cols)")
+        hm.update_layout(margin=dict(l=80, r=20, t=50, b=120), height=600)
+        st.plotly_chart(hm, use_container_width=True)
+# END Inserted: Drivers of Emissions analysis & visuals
