@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import joblib
+from pathlib import Path
+import time
 
 from model.data_process import preprocess_data, create_random_forest, predict_emissions
 from model.analysis import (
@@ -204,33 +207,68 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
         st.session_state['mse'] = None
         st.session_state['r2'] = None
 
-    col_train, col_clear = st.columns([1, 1])
-    with col_train:
-        if st.button("Train model"):
+    def find_saved_model(directory: str = "outputs"):
+        """Return Path to the newest model file in outputs if present (pkl, joblib, sav)."""
+        p = Path(directory)
+        if not p.exists() or not p.is_dir():
+            return None
+        # candidate extensions
+        exts = ("*.pkl", "*.joblib", "*.sav", "*.pickle")
+        files = []
+        for e in exts:
+            files.extend(p.glob(e))
+        if not files:
+            return None
+        # return the most recently modified
+        files = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
+        return files[0]
+
+    # Attempt to auto-load a saved model from outputs/ if available; otherwise train once and save it
+    saved_path = find_saved_model("outputs")
+    if saved_path and st.session_state.get('model') is None:
+        try:
+            loaded = joblib.load(saved_path)
+            st.session_state['model'] = loaded
+            st.success(f"Loaded saved model from {saved_path}")
+        except Exception as e:
+            st.warning(f"Found saved model at {saved_path} but failed to load: {e}")
+    elif saved_path is None and st.session_state.get('model') is None:
+        # No saved model found; train at startup and save
+        try:
+            with st.spinner("No saved model found — training Random Forest on startup (this may take a little while)..."):
+                m, mse, r2 = create_random_forest(df)
+            st.session_state['model'] = m
+            st.session_state['mse'] = mse
+            st.session_state['r2'] = r2
+            # save to outputs
+            outdir = Path("outputs")
+            outdir.mkdir(parents=True, exist_ok=True)
+            fname = outdir / f"model_{int(time.time())}.joblib"
             try:
-                with st.spinner("Training Random Forest model — this may take a few seconds..."):
-                    m, mse, r2 = create_random_forest(df)
-                st.session_state['model'] = m
-                st.session_state['mse'] = mse
-                st.session_state['r2'] = r2
+                joblib.dump(m, fname)
+                st.success(f"Trained model and saved to {fname}")
             except Exception as e:
-                st.error(f"Model training failed: {e}")
-    with col_clear:
-        if st.button("Clear trained model"):
-            st.session_state['model'] = None
-            st.session_state['mse'] = None
-            st.session_state['r2'] = None
+                st.warning(f"Trained model but failed to save to disk: {e}")
+        except Exception as e:
+            st.error(f"Automatic training failed: {e}")
+
+    # provide a single Clear button to reset the in-session model if needed
+    col_clear = st.columns([1])[0]
+    if col_clear.button("Clear trained model"):
+        st.session_state['model'] = None
+        st.session_state['mse'] = None
+        st.session_state['r2'] = None
 
     # show metrics if model available
     if st.session_state.get('model') is not None:
         try:
-            st.metric("Test R²", f"{st.session_state['r2']:.3f}")
-            st.write(f"Test MSE: {st.session_state['mse']:.2f}")
+            if st.session_state.get('r2') is not None:
+                st.metric("Test R²", f"{st.session_state['r2']:.3f}")
+            if st.session_state.get('mse') is not None:
+                st.write(f"Test MSE: {st.session_state['mse']:.2f}")
         except Exception:
             # in case values are not numeric
-            st.write("Model trained — test metrics unavailable")
-    else:
-        st.info("No trained model in session. Click 'Train model' to train once; it will be cached for this session.")
+            st.write("Model available in session.")
 
     # user inputs for prediction
     st.markdown("**Single prediction**")
