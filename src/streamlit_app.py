@@ -351,25 +351,38 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
 
     year_input = st.number_input("Reporting year", min_value=1900, max_value=2100, value=int(default_year))
 
-    model_choice = st.selectbox("Choose model for prediction", options=["Random Forest", "Linear Regression"], index=0)
+    st.write("Predictions from both models (if available) will be shown below.")
 
     if st.button("Predict emissions"):
-        if model_choice == "Random Forest":
-            model = st.session_state.get('model_rf')
-            predict_fn = random_forest_predict_emissions
-        else:
-            model = st.session_state.get('model_lr')
-            predict_fn = linear_predict_emissions
-
-        if model is None:
-            st.error("No trained model available to make predictions. Model not loaded or trained.")
-        else:
+        preds = []
+        # Random Forest prediction
+        if st.session_state.get('model_rf') is not None:
             try:
-                pred = predict_fn(model, state_input, sector_input, int(year_input))
-                st.success(f"Predicted total GHG emissions: {pred:,.0f} tonnes")
-                st.write(f"Note: predictions are based on the {model_choice} trained on the currently loaded dataset; treat as illustrative.")
+                pr = random_forest_predict_emissions(st.session_state['model_rf'], state_input, sector_input, int(year_input))
+                preds.append(("Random Forest", pr))
             except Exception as e:
-                st.error(f"Prediction failed: {e}")
+                preds.append(("Random Forest", f"Error: {e}"))
+        else:
+            preds.append(("Random Forest", "Model not available"))
+
+        # Linear Regression prediction
+        if st.session_state.get('model_lr') is not None:
+            try:
+                pl = linear_predict_emissions(st.session_state['model_lr'], state_input, sector_input, int(year_input))
+                preds.append(("Linear Regression", pl))
+            except Exception as e:
+                preds.append(("Linear Regression", f"Error: {e}"))
+        else:
+            preds.append(("Linear Regression", "Model not available"))
+
+        # display results side-by-side when both present
+        cols = st.columns(len(preds))
+        for (name, val), col in zip(preds, cols):
+            if isinstance(val, (int, float, np.floating, np.integer)):
+                col.metric(name, f"{val:,.0f} tonnes")
+            else:
+                col.write(f"{name}: {val}")
+        st.write("Note: predictions are illustrative and depend on how the models were trained on the current dataset.")
 
 # Emissions change 2021 -> 2023 (if years present)
 st.markdown("---")

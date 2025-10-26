@@ -66,7 +66,7 @@ def linear_predict_emissions(model: LinearRegression, state: str, industry_secto
     input_df = pd.DataFrame([{
         'state': state,
         'industry_sector': industry_sector,
-        'reporting_year': str(reporting_year)
+        'reporting_year': reporting_year
     }])
 
     # One-hot encode the input data
@@ -98,7 +98,7 @@ def random_forest_predict_emissions(model: RandomForestRegressor, state: str, in
     input_df = pd.DataFrame([{
         'state': state,
         'industry_sector': industry_sector,
-        'reporting_year': str(reporting_year)
+        'reporting_year': reporting_year
     }])
 
     # One-hot encode the input data
