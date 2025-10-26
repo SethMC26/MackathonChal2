@@ -1,7 +1,7 @@
 import argparse
 import sys
 import logging
-from model.data_process import create_random_forest, predict_emissions, preprocess_data
+from model.data_process import create_linear_model, create_random_forest, predict_emissions, preprocess_data
 
 VERSION = "0.1.0"
 
@@ -37,6 +37,9 @@ def main(argv=None):
             # fallback if object isn't a pandas DataFrame or .to_string fails
             print(df)
 
+        print("linear regression model")
+        print(create_linear_model(df))
+        
         # Create random forest model and store a copy of it for reference later so we dont recreate it
         model, mse, r2 = create_random_forest(df)
         print(f"Random Forest Model created. MSE: {mse}, R2: {r2}")
