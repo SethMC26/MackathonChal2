@@ -13,7 +13,7 @@ from model.data_process import (
     random_forest_predict_emissions,
     create_linear_regression,
     linear_predict_emissions,
-    evaluate_model,           # <- added
+    evaluate_model
 )
 from model.analysis import (
     top_sectors,
@@ -317,15 +317,42 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
         except Exception as e:
             st.error(f"Automatic Linear Regression training failed: {e}")
 
-    # provide a single Clear button to reset the in-session models if needed
+    # provide a single Clear button to reset in-session models AND delete saved artifacts
     col_clear = st.columns([1])[0]
-    if col_clear.button("Clear cached models (force retrain on refresh)"):
+    if col_clear.button("Clear cache: delete saved models and retrain"):
+        # Clear in-memory cached models/metrics
         st.session_state['model_rf'] = None
         st.session_state['mse_rf'] = None
         st.session_state['r2_rf'] = None
         st.session_state['model_lr'] = None
         st.session_state['mse_lr'] = None
         st.session_state['r2_lr'] = None
+
+        # Delete saved model files from outputs/
+        outdir = Path("outputs")
+        deleted = 0
+        if outdir.exists() and outdir.is_dir():
+            patterns = [
+                "model_rf_*.joblib", "model_lr_*.joblib",
+                "model_rf_*.pkl", "model_lr_*.pkl",
+                "model_rf_*.pickle", "model_lr_*.pickle",
+                "model_rf_*.sav", "model_lr_*.sav",
+            ]
+            for pat in patterns:
+                for f in outdir.glob(pat):
+                    try:
+                        f.unlink(missing_ok=True)
+                        deleted += 1
+                    except Exception:
+                        # if a specific file can't be deleted, continue with others
+                        pass
+        st.info(f"Cleared cached models (deleted {deleted} file(s) in outputs). Retraining will run on reload.")
+        # Force an immediate rerun so the auto-train logic executes now
+        try:
+            st.rerun()
+        except Exception:
+            # Fallback for older Streamlit versions
+            st.experimental_rerun()
 
     # show metrics for available models
     if st.session_state.get('model_rf') is not None:
@@ -379,7 +406,7 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
         # Random Forest prediction
         if st.session_state.get('model_rf') is not None:
             try:
-                pr = random_forest_predict_emissions(st.session_state['model_rf'], state_input, sector_input, int(year_input))
+                pr = random_forest_predict_emissions(st.session_state['model_rf'], state_input, sector_input, int(year_input), df)
                 preds.append(("Random Forest", pr))
             except Exception as e:
                 preds.append(("Random Forest", f"Error: {e}"))
@@ -389,7 +416,7 @@ with st.expander("Train or view model (uses state, sector, year)", expanded=True
         # Linear Regression prediction
         if st.session_state.get('model_lr') is not None:
             try:
-                pl = linear_predict_emissions(st.session_state['model_lr'], state_input, sector_input, int(year_input))
+                pl = linear_predict_emissions(st.session_state['model_lr'], state_input, sector_input, int(year_input), df)
                 preds.append(("Linear Regression", pl))
             except Exception as e:
                 preds.append(("Linear Regression", f"Error: {e}"))
